@@ -91,17 +91,15 @@ def read_inverter_holding_registers(client):
         holding_registers['exportLimitRate']            = registers[123-next_chunk_start]
         holding_registers['svgFunctionEnabled']         = registers[141-next_chunk_start]
         holding_registers['numBatteryModules']          = registers[185-next_chunk_start]
-    next_chunk_start = 241
-    registers = read_holding_registers(client, next_chunk_start, 3)
-    if registers:
-        holding_registers['inverterLng']                = registers[241-next_chunk_start]
-        holding_registers['inverterLat']                = registers[242-next_chunk_start]
+    # next_chunk_start = 241
+    # registers = read_holding_registers(client, next_chunk_start, 3)
+    # if registers:
+    #     holding_registers['inverterLng']                = registers[241-next_chunk_start]
+    #     holding_registers['inverterLat']                = registers[242-next_chunk_start]
     registers = read_holding_registers(client, 1000, 93)
     if registers:
         holding_registers['vbatStopCharge']             = registers[5]
         holding_registers['vbatStopDischarge']          = registers[6]
-        holding_registers['battMdlSerialNum']           = registers[14]
-        holding_registers['battMdlParallNum']           = registers[15]
         #Priority Mode - 0 = load, 1 = Batt, 2 = Grid
         holding_registers['priorityMode']               = registers[44]
         holding_registers['battType']                   = registers[48]
@@ -140,16 +138,16 @@ def read_inverter_input_registers(client):
         input_registers['pvPowerTotal']                 = read_double_reg(registers[1], registers[2], 0.1)
         input_registers['pv1Voltage']                   = round(registers[3] * 0.1, 1)
         input_registers['pv1Current']                   = round(registers[4] * 0.1, 1)
-        input_registers['pv1Power']                     = read_double_reg(registers[5], registers[6], 0.1)
+        input_registers['pv1Power']                     = round(read_double_reg(registers[5], registers[6], 0.1), 1)
         input_registers['pv2Voltage']                   = round(registers[7] * 0.1, 1)
         input_registers['pv2Current']                   = round(registers[8] * 0.1, 1)
-        input_registers['pv2Power']                     = read_double_reg(registers[9], registers[10], 0.1)
-        input_registers['pvBattPower']                  = read_double_reg(registers[35], registers[36], 0.1)
+        input_registers['pv2Power']                     = round(read_double_reg(registers[9], registers[10], 0.1), 1)
+        input_registers['pvBattPower']                  = round(read_double_reg(registers[35], registers[36], 0.1), 1)
         input_registers['gridFreq']                     = round(registers[37] * 0.01, 3)
         input_registers['gridVolt']                     = round(registers[38] * 0.1, 2)
         input_registers['pvOutputCurrent']              = round(registers[39] * 0.1, 1)  # This seems to be PV output current, not grid
-        input_registers['pvOutputWattsVA']              = read_double_reg(registers[40], registers[41], 0.1)
-        input_registers['inverterTemperature']          = registers[93] * 0.1
+        input_registers['pvOutputWattsVA']              = round(read_double_reg(registers[40], registers[41], 0.1), 1)
+        input_registers['inverterTemperature']          = round(registers[93] * 0.1, 1)
         input_registers['IPMTemperature']               = round(registers[94] * 0.1, 1)  # What is an IPM?
         input_registers['boostTemperature']             = round(registers[95] * 0.1, 1)
         input_registers['inverterPowerFactorNow']       = registers[100]  # Says 0 -> 20000 which is odd. Surely max PF is 1?
@@ -241,7 +239,7 @@ def main():
             input_registers = read_inverter_input_registers(client)
             input_registers['serialNumber'] = serial_number
             print(json.dumps(input_registers, indent=4))
-            mqtt_client = mqtt.Client()
+            mqtt_client = mqtt.Client(client_id=f"growatt", callback_api_version=2)
             payload = json.dumps(input_registers)
             publish_mqtt(mqtt_client, MQTT_TOPIC, payload)
             payload = json.dumps(holding_registers)
