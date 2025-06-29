@@ -13,7 +13,7 @@ MODBUS_DEVICES = [
 ]
 
 # MQTT Configuration
-MQTT_BROKER = "127.0.0.1"
+MQTT_BROKER = "localhost"
 MQTT_PORT = 1883
 MQTT_TOPIC = "growatt"
 
@@ -252,4 +252,6 @@ def main():
         client.close()
         
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
+        time.sleep(10)

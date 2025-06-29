@@ -1,0 +1,18 @@
+version: "3.8"
+
+services:
+  growatt_modbus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: growatt_modbus:latest
+    container_name: growatt_modbus
+    network_mode: host  # Host networking: access LAN, host DNS
+    volumes:
+      - /etc/resolv.conf:/etc/resolv.conf:ro  # Ensure it uses host DNS
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/London
+networks:
+  growatt_internal:
+    driver: bridge
