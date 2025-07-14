@@ -48,6 +48,24 @@ def read_input_registers(client, start_address, count):
         raise
         return None
 
+def write_registers(client, start_address, values):
+    """
+    Write holding registers to Modbus.
+    :param client: ModbusTcpClient instance
+    :param start_address: Starting register address
+    :param values: List of values to write
+    :return: True if successful, False otherwise
+    """
+    try:
+        response = client.write_registers(address=start_address, values=values)
+        if response.isError():
+            print(f"Error writing Modbus registers {start_address}-{start_address+len(values)-1}")
+            return False
+        return True
+    except Exception as e:
+        print(f"Modbus write error: {e}")
+        return False
+
 def get_inverter_serial_number(client):
     """Read inverter serial number from Modbus."""
     registers = read_holding_registers(client, 23, 5)
@@ -63,7 +81,7 @@ def get_inverter_time(client):
     registers = read_holding_registers(client, 45, 7)
     year, month, day, hour, minute, second, dow = registers
     print(registers)
-    inverter_now = datetime.datetime(year, month, day, hour, minute, second)
+    inverter_now = datetime.datetime(year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc)
     return inverter_now
 
 def read_inverter_holding_registers(client):
@@ -231,8 +249,24 @@ def main():
         if client.connect(): # Should catch and test the return state here
             serial_number = get_inverter_serial_number(client)
             print(f"Serial number: {serial_number}")
+
+            # Get the current time from the inverter and see how it compares to UTC
+            # Why is this important?  If we are setting the inverter to charge at a certain time, we want to ensure the inverter's clock is accurate.
+            # Especially when using Octopus Agile
             inverter_time = get_inverter_time(client)
             print(f"Inverter time: {inverter_time}")
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            delta = abs((now_utc - inverter_time).total_seconds())
+            print(f"Delta between inverter time and UTC now: {delta} seconds")
+            if delta > 60:
+                print(f"WARNING: Inverter time {inverter_time} is more than 1 minute out from UTC now {now_utc} (delta {delta} seconds)")
+                time_list = [now_utc.year - 2000, now_utc.month, now_utc.day, now_utc.hour, now_utc.minute, now_utc.second, now_utc.isoweekday()]
+                if not write_registers(client, 45, time_list):
+                    print("Failed to update inverter time")
+                else:
+                    print(f"Inverter time updated to {now_utc.isoformat()}")
+            
+
             holding_registers = read_inverter_holding_registers(client)
             holding_registers['serialNumber'] = serial_number
             print(json.dumps(holding_registers, indent=4))
