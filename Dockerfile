@@ -11,7 +11,8 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy your script
+# Copy the shared library and the poller entrypoint
+COPY growatt/ ./growatt/
 COPY growatt_modbus.py .
 
 # Define the command to run the script

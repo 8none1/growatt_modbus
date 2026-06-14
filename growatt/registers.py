@@ -1,0 +1,66 @@
+"""Register metadata for Growatt SPH inverters.
+
+``SENSOR_META`` is the curated map of state-payload field -> Home Assistant
+sensor metadata used to drive MQTT discovery. Fields not listed here are still
+published in the state payload, they just do not get a HA entity.
+Tuple: (friendly name, device_class, unit, state_class).
+"""
+
+SENSOR_META = {
+    "pvPowerTotal":         ("PV power total",        "power",       "W",  "measurement"),
+    "pv1Voltage":           ("PV1 voltage",           "voltage",     "V",  "measurement"),
+    "pv1Current":           ("PV1 current",           "current",     "A",  "measurement"),
+    "pv1Power":             ("PV1 power",             "power",       "W",  "measurement"),
+    "pv2Voltage":           ("PV2 voltage",           "voltage",     "V",  "measurement"),
+    "pv2Current":           ("PV2 current",           "current",     "A",  "measurement"),
+    "pv2Power":             ("PV2 power",             "power",       "W",  "measurement"),
+    "pvBattPower":          ("Battery PV power",      "power",       "W",  "measurement"),
+    "gridFreq":             ("Grid frequency",        "frequency",   "Hz", "measurement"),
+    "gridVolt":             ("Grid voltage",          "voltage",     "V",  "measurement"),
+    "pvOutputCurrent":      ("Inverter output current", "current",   "A",  "measurement"),
+    "pvOutputWattsVA":      ("Inverter apparent power", "apparent_power", "VA", "measurement"),
+    "inverterTemperature":  ("Inverter temperature",  "temperature", "°C", "measurement"),
+    "IPMTemperature":       ("IPM temperature",       "temperature", "°C", "measurement"),
+    "boostTemperature":     ("Boost temperature",     "temperature", "°C", "measurement"),
+    "realOutputPowerPercent": ("Real output power",   "power_factor", "%", "measurement"),
+    "dischargePower":       ("Battery discharge power", "power",     "W",  "measurement"),
+    "chargePower":          ("Battery charge power",  "power",       "W",  "measurement"),
+    "battVoltage":          ("Battery voltage",       "voltage",     "V",  "measurement"),
+    "battSOC":              ("Battery SOC",           "battery",     "%",  "measurement"),
+    "gridImportPowerTotal": ("Grid import power",     "power",       "W",  "measurement"),
+    "gridExportPowerTotal": ("Grid export power",     "power",       "W",  "measurement"),
+    "pLocalLoadTotal":      ("Local load power",      "power",       "W",  "measurement"),
+    "battTemperature":      ("Battery temperature",   "temperature", "°C", "measurement"),
+    "epsFreq":              ("EPS frequency",         "frequency",   "Hz", "measurement"),
+    "epsVolt":              ("EPS voltage",           "voltage",     "V",  "measurement"),
+    "epsPower":             ("EPS power",             "power",       "W",  "measurement"),
+    "epsLoadPercent":       ("EPS load",              None,          "%",  "measurement"),
+    "bmsSOC":               ("BMS SOC",               "battery",     "%",  "measurement"),
+    "bmsSOH":               ("BMS state of health",   None,          "%",  "measurement"),
+    "bmsCycleCount":        ("BMS cycle count",       None,          None, "total_increasing"),
+    # --- Energy counters (kWh). total_increasing so the HA energy dashboard can use them. ---
+    "eacToday":             ("PV output energy today",   "energy",   "kWh", "total_increasing"),
+    "eacTotal":             ("PV output energy total",   "energy",   "kWh", "total_increasing"),
+    "epvTotal":             ("PV generation total",      "energy",   "kWh", "total_increasing"),
+    "epv1Total":            ("PV1 generation total",     "energy",   "kWh", "total_increasing"),
+    "epv2Total":            ("PV2 generation total",     "energy",   "kWh", "total_increasing"),
+    "eToUserToday":         ("Energy to load today",     "energy",   "kWh", "total_increasing"),
+    "eToUserTotal":         ("Energy to load total",     "energy",   "kWh", "total_increasing"),
+    "eToGridToday":         ("Energy exported today",    "energy",   "kWh", "total_increasing"),
+    "eToGridTotal":         ("Energy exported total",    "energy",   "kWh", "total_increasing"),
+    "eDischargeToday":      ("Battery discharge today",  "energy",   "kWh", "total_increasing"),
+    "eDischargeTotal":      ("Battery discharge total",  "energy",   "kWh", "total_increasing"),
+    "eChargeToday":         ("Battery charge today",     "energy",   "kWh", "total_increasing"),
+    "eChargeTotal":         ("Battery charge total",     "energy",   "kWh", "total_increasing"),
+    "eLocalLoadToday":      ("Load energy today",        "energy",   "kWh", "total_increasing"),
+    "eLocalLoadTotal":      ("Load energy total",        "energy",   "kWh", "total_increasing"),
+    "acChargeEnergyToday":  ("AC charge energy today",   "energy",   "kWh", "total_increasing"),
+    "acChargeEnergyTotal":  ("AC charge energy total",   "energy",   "kWh", "total_increasing"),
+    "eSelfToday":           ("Self-consumption today",   "energy",   "kWh", "total_increasing"),
+    "eSelfTotal":           ("Self-consumption total",   "energy",   "kWh", "total_increasing"),
+    # --- Diagnostics ---
+    "maxCellVoltage":       ("Max cell voltage",      "voltage",     "V",  "measurement"),
+    "minCellVoltage":       ("Min cell voltage",      "voltage",     "V",  "measurement"),
+    "operatingHours":       ("Operating hours",       "duration",    "h",  "total_increasing"),
+    "deratingMode":         ("Derating mode",         None,          None, "measurement"),
+}
