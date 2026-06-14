@@ -89,6 +89,36 @@ per-cell detail is not reachable over the EW11; that would need a CAN interface.
   rollback, along with `~/docker/_backups/control-cutover-*`.
 - The MQTT broker and Home Assistant both run on perceptron.
 
+## Reverting from the ShineWiFi-X dongles back to the EW11s
+
+On 2026-06-14 both inverters were moved from EW11 bridges (Modbus TCP / MBAP) to reflashed
+ShineWiFi-X dongles (raw Modbus-RTU-over-TCP, `framer: rtu`). The `framer` support is
+backward-compatible, so **reverting is config + hardware only, no code change/redeploy**.
+
+Quick revert (on perceptron):
+1. **Hardware**: power the EW11 back on for each inverter and swap the bridge on the RS485 bus
+   (EW11 in, dongle out). Modbus is single-master, never have both on the same inverter at once.
+2. **Config**: restore the pre-dongle config (EW11 hosts, no `framer` key) in one step:
+   `cp ~/docker/_backups/config-pre-rtu-20260614-203514.yaml ~/docker/growatt_modbus/config/config.yaml`
+3. **Restart the poller** (it reads config only at startup): `docker restart growatt_modbus`.
+   The control CGI reads config fresh per request, so it needs no restart (`docker restart
+   growatt_control` is harmless if you want to be sure).
+4. **Verify**: `docker logs growatt_modbus` shows both serials; `curl
+   "http://localhost:8085/cgi-bin/switch_inverter_mode.py?action=get_all_slots"` returns success.
+
+Reference values:
+- **EW11** (revert target): `ew11-1.whizzy.org` (inverter1 / battery / control target),
+  `ew11-2.whizzy.org` (inverter2), port 502, Modbus TCP/MBAP = **no `framer` key**, unit 1,
+  RS485 9600 8N1.
+- **Dongles** (current): `192.168.42.204` (inverter1, MAC 4C:75:25:26:6C:83),
+  `192.168.42.205` (inverter2, MAC 58:BF:25:C7:C7:3A), `framer: rtu`, DHCP-reserved.
+- Serials are unchanged either way: inverter1 `WCK0CDE013`, inverter2 `WCK0CDE018`.
+- **Partial revert** (one inverter only): edit just that device's `host:` back to its EW11 and
+  delete its `framer: rtu` line, then `docker restart growatt_modbus`.
+- Config backups in `~/docker/_backups/`: `config-pre-rtu-*` (EW11), `config-pre-ipchange-*`
+  (dongle pool IPs .188/.18 before reservations), and `control-cutover-*` (the original
+  lighttpd CGI + composes, for control-side rollback).
+
 ## Open TODOs / remaining work
 
 Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
