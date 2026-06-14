@@ -1,3 +1,7 @@
+# Local runtime configuration (copy from config.yaml.example)
+config.yaml
+config/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

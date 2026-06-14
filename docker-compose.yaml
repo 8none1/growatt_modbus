@@ -1,16 +1,18 @@
 services:
   growatt_modbus:
-#    build:
-#      context: .
-#      dockerfile: Dockerfile
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: growatt_modbus:latest
     container_name: growatt_modbus
     network_mode: host  # Host networking: access LAN, host DNS
     volumes:
       - /etc/resolv.conf:/etc/resolv.conf:ro  # Ensure it uses host DNS
+      - ./config:/config:ro                   # Mount config.yaml at /config/config.yaml
     restart: unless-stopped
     environment:
       - TZ=Europe/London
-networks:
-  growatt_internal:
-    driver: bridge
+      # - LOG_LEVEL=DEBUG
+      # - MQTT_BROKER=192.168.0.10
+      # - MQTT_USERNAME=growatt
+      # - MQTT_PASSWORD=secret

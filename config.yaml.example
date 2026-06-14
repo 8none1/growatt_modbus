@@ -1,0 +1,35 @@
+# Growatt Modbus -> MQTT bridge configuration.
+# Copy this file to config.yaml and edit for your setup.
+# In the container this is mounted at /config/config.yaml.
+
+# How often to poll each inverter, in seconds.
+poll_interval: 10
+
+# One entry per inverter. host is the EW11 bridge (or any Modbus TCP gateway).
+devices:
+  - name: inverter1          # friendly name, used in Home Assistant
+    host: ew11-1.example.com
+    port: 502
+    unit: 1
+  - name: inverter2
+    host: ew11-2.example.com
+    port: 502
+    unit: 1
+
+mqtt:
+  broker: localhost
+  port: 1883
+  username: null             # set if your broker requires auth
+  password: null
+  # Original flat topic kept for backwards compatibility (Grafana/Node-RED etc).
+  legacy_topic: growatt
+  # New per-device topic prefix: data is published to <prefix>/<serial>/state.
+  topic_prefix: growatt
+  retain: true
+  # Home Assistant MQTT discovery.
+  discovery_prefix: homeassistant
+  discovery: true
+
+time_sync:
+  enabled: true              # correct the inverter RTC if it drifts
+  max_drift_seconds: 60      # only rewrite the clock if drift exceeds this
