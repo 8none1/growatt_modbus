@@ -1,10 +1,9 @@
 substitutions:
-  name: shinewifi-x-1
-  friendly_name: "Growatt ShineWiFi-X Bridge 1"
-  # ESP module variant. Confirmed by flash-id on a real unit: ESP8266EX with 4MB
-  # flash -> esp12e. Older 1MB ShineWiFi-X boards use esp07s; check your board.
-  #   esp12e -> 4MB-flash boards (the unit we backed up)
-  #   esp07s -> older 1MB-flash boards
+  name: shinewifi-x            # per dongle: shinewifi-x-1, shinewifi-x-2, ...
+  friendly_name: "Growatt ShineWiFi-X Bridge"
+  # esp12e = the generic 4MB-flash ESP8266 build profile. The ShineWiFi-X module is an
+  # ESP-07S-style ESP8266EX; flash-id on a real unit confirmed 4MB. The board name is a
+  # build profile, not a claim about the module. Older 1MB dongles: use esp01_1m.
   board: esp12e
 
 esphome:
@@ -15,8 +14,8 @@ esp8266:
   board: ${board}
   restore_from_flash: true
 
-# UART0 (GPIO1/GPIO3) is wired to the inverter, so serial logging MUST be off or it
-# corrupts the Modbus line. Logs are still available over the network (esphome logs).
+# UART0 (GPIO1/GPIO3) carries the inverter Modbus, so serial logging MUST be off or it
+# corrupts the bus. Logs are still available over the network (esphome logs).
 logger:
   baud_rate: 0
   level: INFO
@@ -24,33 +23,35 @@ logger:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  # Fallback AP if wifi is unavailable, so the dongle is never unreachable.
+  min_auth_mode: WPA2          # avoid the insecure WPA/TKIP fallback
+  # Fallback AP so the dongle is never unreachable if wifi drops.
   ap:
     ssid: "${name} fallback"
     password: !secret ap_password
 
 captive_portal:
 
-# Native API is not needed for the bridge itself, but it gives free OTA logs and lets
-# Home Assistant capture the dongle's own health (signal, uptime, link state).
+# Native API: not needed for the bridge itself, but it adopts the dongle into Home
+# Assistant (health diagnostics below) and is what receives the button event.
 api:
   encryption:
-    key: !secret api_key
+    key: !secret api_encryption_key
 
 ota:
   - platform: esphome
     password: !secret ota_password
 
-# Raw TCP <-> UART passthrough. No Modbus framing on-device: the dongle stays dumb and
-# the Python poller does all the decoding (talking raw RTU-over-TCP).
+# Raw TCP <-> UART passthrough. No Modbus framing on-device: the dongle stays dumb and the
+# Python poller does all decoding. The socket therefore carries raw Modbus RTU (with CRC),
+# i.e. RTU-over-TCP, so the poller must use `framer: rtu` for this device (see README).
 external_components:
   - source: github://oxan/esphome-stream-server
     components: [stream_server]
 
 uart:
   id: inverter_uart
-  rx_pin: GPIO3            # RXD0 - inverter TxD (via R30 on the stock board)
-  tx_pin: GPIO1            # TXD0 - inverter RxD (via R29 on the stock board)
+  rx_pin: GPIO3                # RXD0 - inverter TxD
+  tx_pin: GPIO1                # TXD0 - inverter RxD
   baud_rate: 115200
   data_bits: 8
   parity: NONE
@@ -60,16 +61,75 @@ uart:
 
 stream_server:
   uart_id: inverter_uart
-  port: 502               # match the EW11 so the only poller config delta is framer: rtu
+  port: 502                    # same port as an EW11; the only poller delta is framer: rtu
   buffer_size: 512
 
-# --- Passive diagnostics: capture the dongle's own health into HA for free ---
+# --- Status LEDs -----------------------------------------------------------------------
+# ShineWiFi-X pins (per OpenInverterGateway), active-high: green=GPIO0, red=GPIO2,
+# blue=GPIO16. None clash with the inverter UART. Add `inverted: true` to a pin if a LED
+# reads backwards on your board.
+#   green = 1Hz heartbeat  -> movement = firmware alive/healthy; frozen = wedged.
+#                             (the only LED visible through the case window, so it carries
+#                              the health signal.)
+#   red   = ESPHome status -> off when healthy, blinks on warning/error.
+#   blue  = poller connected to :502 -> pulses once per poll (the poller opens/closes the
+#                             TCP connection each cycle), so it doubles as an activity light.
+output:
+  - platform: gpio
+    pin: GPIO0                 # green
+    id: led_green
+  - platform: gpio
+    pin: GPIO16                # blue
+    id: led_blue
+
+status_led:
+  pin:
+    number: GPIO2              # red
+
+interval:
+  - interval: 1s
+    then:
+      - output.turn_on: led_green
+      - delay: 500ms
+      - output.turn_off: led_green
+
+# --- Inputs / diagnostics --------------------------------------------------------------
 binary_sensor:
   - platform: stream_server
     connected:
       name: "Poller connected"
+      id: poller_connected
+      on_press:
+        then:
+          - output.turn_on: led_blue
+      on_release:
+        then:
+          - output.turn_off: led_blue
+  # Front-panel button on A0 (analog), active-LOW: idle ~0.62, pressed ~0.008. The
+  # `invert` makes "on" = pressed; on_press fires a Home Assistant event you can hook
+  # automations onto. Re-tune `threshold` if your unit reads differently (watch the
+  # "Button level" sensor).
+  - platform: analog_threshold
+    name: "Button"
+    id: shine_button
+    sensor_id: button_level
+    threshold: 0.3
+    filters:
+      - invert:
+    on_press:
+      then:
+        - homeassistant.event:
+            event: esphome.shinewifi_button
+            data:
+              device: ${name}
 
 sensor:
+  - platform: adc
+    pin: A0
+    id: button_level
+    name: "Button level"
+    update_interval: 250ms
+    entity_category: diagnostic
   - platform: stream_server
     connection_count:
       name: "Active connections"
@@ -85,3 +145,10 @@ text_sensor:
       name: "IP address"
   - platform: version
     name: "ESPHome version"
+
+# Remote management buttons (appear in HA / the ESPHome dashboard).
+button:
+  - platform: restart
+    name: "Restart"
+  - platform: safe_mode
+    name: "Safe mode boot"

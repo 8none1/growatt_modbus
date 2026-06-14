@@ -51,6 +51,19 @@ one RS485 bus with different Modbus unit IDs.
 > to the inverter, not Modbus, so it cannot be read directly over the EW11. See
 > `CLAUDE.md` for the open investigation.
 
+## Alternative bridge: a reflashed ShineWiFi-X dongle
+
+You do not have to use an EW11. The Growatt **ShineWiFi-X** WiFi dongle (the one that
+plugs into the inverter's "USB" port, which is really TTL serial, not USB) contains an
+ESP8266, and it can be reflashed with [ESPHome](https://esphome.io/) to act as the same
+kind of dumb serial-to-TCP Modbus bridge, no external box, no RS485 wiring. The firmware
+and full instructions are in [`shinewifi-bridge/`](shinewifi-bridge/).
+
+The one difference for this service: a reflashed dongle presents **raw Modbus
+RTU-over-TCP** (not Modbus TCP / MBAP like the EW11), so set **`framer: rtu`** on that
+device in `config.yaml`. Everything else, decode, MQTT, HA discovery, clock sync and
+control writes, is identical. You can mix EW11s and dongles across inverters freely.
+
 ## Configuration
 
 All settings live in `config.yaml`. Copy the example and edit it:
@@ -63,7 +76,8 @@ $EDITOR config.yaml
 Key options (see `config.yaml.example` for the full annotated file):
 
 - `poll_interval` - seconds between polls.
-- `devices` - list of inverters: `name`, `host` (the EW11), `port`, `unit`.
+- `devices` - list of inverters: `name`, `host` (the EW11 or dongle), `port`, `unit`, and
+  optional `framer: rtu` (set this for a reflashed ShineWiFi-X dongle; omit it for an EW11).
 - `mqtt.broker` / `mqtt.port` / `mqtt.username` / `mqtt.password`.
 - `mqtt.legacy_topic` - the original flat topic, kept for existing consumers.
 - `mqtt.topic_prefix` - per-device data goes to `<prefix>/<serial>/state`.
