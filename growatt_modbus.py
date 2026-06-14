@@ -16,7 +16,7 @@ import logging
 import paho.mqtt.client as mqtt
 from pymodbus.client import ModbusTcpClient
 
-from growatt.config import load_config
+from growatt.config import load_config, device_framer
 from growatt.registers import SENSOR_META
 from growatt.client import get_inverter_serial_number, sync_inverter_time
 from growatt.monitor import (
@@ -86,7 +86,7 @@ def publish_discovery(client, mqtt_cfg, serial, device_name):
 # ---------------------------------------------------------------------------
 def poll_device(dev, config, mqtt_client, discovered):
     """Poll a single inverter and publish its data."""
-    client = ModbusTcpClient(host=dev["host"], port=dev.get("port", 502))
+    client = ModbusTcpClient(host=dev["host"], port=dev.get("port", 502), framer=device_framer(dev))
     if not client.connect():
         log.warning("Failed to connect to Modbus device %s", dev["host"])
         return

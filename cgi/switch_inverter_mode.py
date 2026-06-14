@@ -38,8 +38,8 @@ def main():
     response = {}
 
     config = load_config(require_devices=True)
-    host, port, device_id = control_target(config)
-    inv = InverterControl(host, port, device_id)
+    host, port, device_id, framer = control_target(config)
+    inv = InverterControl(host, port, device_id, framer=framer)
     try:
         if method == "GET":
             params = dict(p.split("=", 1) for p in query_string.split("&") if "=" in p)

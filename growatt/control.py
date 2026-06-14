@@ -39,9 +39,10 @@ def decode_time(encoded_time):
 class InverterControl:
     """Connect to one inverter and issue control commands."""
 
-    def __init__(self, host, port=502, device_id=1, timeout=5):
+    def __init__(self, host, port=502, device_id=1, framer=None, timeout=5):
         self.device_id = device_id
-        self.client = ModbusTcpClient(host, port=port, timeout=timeout)
+        kwargs = {"framer": framer} if framer is not None else {}
+        self.client = ModbusTcpClient(host, port=port, timeout=timeout, **kwargs)
         self.connected = self.client.connect()
 
     def close(self):
