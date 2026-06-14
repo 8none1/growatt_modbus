@@ -126,3 +126,56 @@ relying on it.
 
 Deferred until a dongle is flashed and verified against a real SPH. Tracked alongside the
 firmware in this directory; firmware merged in PR #10.
+
+---
+
+# Post-cutover hardening (observed in production, 2026-06-14)
+
+The `framer: rtu` cutover is done: both `growatt_modbus` (poller) and `growatt_control`
+now point at the dongles (192.168.42.204 / .205, `framer: rtu`) and the EW11s are retired.
+It works, but the dongle is a **raw** RTU-over-TCP bridge with no on-device retry or frame
+reassembly (the EW11 hid these because it did MBAP framing on-device). So the odd
+incomplete/garbled frame now reaches the client. Two fixes worth making in this repo:
+
+## Fix 1 - tolerate the occasional dropped/garbled frame
+
+Symptom (in `growatt_modbus` logs): an intermittent `Connection to (192.168.42.204, 502)
+failed: timed out`, and occasional partial reads, roughly 1 in a few tens of cycles, with
+all other cycles fine. WiFi to both dongles is solid (0% ping loss), so it is the raw
+RTU-over-TCP path, not the link.
+
+Implement:
+- Construct the Modbus client with retries and a slightly longer timeout, at BOTH call
+  sites (`growatt_modbus.py:~89` `poll_device`, and `growatt/control.py:~44`
+  `InverterControl.__init__`):
+  ```python
+  ModbusTcpClient(host, port=port, framer=device_framer(dev), timeout=5, retries=3)
+  ```
+  (pymodbus 3.x supports `retries`.)
+- Treat any `rr.isError()` on a read as transient: log at WARNING and cleanly skip the
+  rest of this device's cycle, rather than proceeding with partial data.
+
+## Fix 2 - guard against a bad serial number (stops the phantom HA device)
+
+Symptom: a failed serial read yielded a bogus serial (it surfaced as `unknown_serial`),
+and `poll_device` then published full state AND HA discovery under it, creating a phantom
+`unknown_serial` device with 54 entities plus `growatt/unknown_serial/state` (all retained).
+
+Implement in `poll_device`, right after `serial_number = get_inverter_serial_number(client)`:
+```python
+serial_number = (serial_number or "").strip()
+if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
+    log.warning("Bad/blank serial from %s (%r), skipping cycle", dev["host"], serial_number)
+    return  # do NOT publish state/discovery, do NOT add to `discovered`
+```
+(Or have `get_inverter_serial_number` return `None` on a blank/garbled read and skip on None.)
+Net effect: a momentary bad read costs one skipped cycle, not polluted MQTT/HA.
+
+## One-off: clear the retained junk already on the broker
+
+Separate from the code fix, the existing phantom needs clearing (publishing an empty
+retained payload to each discovery topic removes the entity in HA):
+- 54x `homeassistant/sensor/unknown_serial_<key>/config`
+- `growatt/unknown_serial/state`
+Scope strictly to `unknown_serial`; leave the real serials (WCK0CDE013/WCK0CDE018) and all
+the Zigbee2MQTT (`0x...`) topics alone.
