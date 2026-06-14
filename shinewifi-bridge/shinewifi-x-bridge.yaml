@@ -1,0 +1,86 @@
+substitutions:
+  name: shinewifi-x-1
+  friendly_name: "Growatt ShineWiFi-X Bridge 1"
+  # ESP module variant:
+  #   esp07s -> older ShineWiFi-X (1MB flash)
+  #   esp12e -> newer 4MB-flash boards
+  board: esp07s
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp8266:
+  board: ${board}
+  restore_from_flash: true
+
+# UART0 (GPIO1/GPIO3) is wired to the inverter, so serial logging MUST be off or it
+# corrupts the Modbus line. Logs are still available over the network (esphome logs).
+logger:
+  baud_rate: 0
+  level: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Fallback AP if wifi is unavailable, so the dongle is never unreachable.
+  ap:
+    ssid: "${name} fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# Native API is not needed for the bridge itself, but it gives free OTA logs and lets
+# Home Assistant capture the dongle's own health (signal, uptime, link state).
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# Raw TCP <-> UART passthrough. No Modbus framing on-device: the dongle stays dumb and
+# the Python poller does all the decoding (talking raw RTU-over-TCP).
+external_components:
+  - source: github://oxan/esphome-stream-server
+    components: [stream_server]
+
+uart:
+  id: inverter_uart
+  rx_pin: GPIO3            # RXD0 - inverter TxD (via R30 on the stock board)
+  tx_pin: GPIO1            # TXD0 - inverter RxD (via R29 on the stock board)
+  baud_rate: 115200
+  data_bits: 8
+  parity: NONE
+  stop_bits: 1
+  # SPH register reads can return ~250 bytes in one frame; give the buffer headroom.
+  rx_buffer_size: 512
+
+stream_server:
+  uart_id: inverter_uart
+  port: 502               # match the EW11 so the only poller config delta is framer: rtu
+  buffer_size: 512
+
+# --- Passive diagnostics: capture the dongle's own health into HA for free ---
+binary_sensor:
+  - platform: stream_server
+    connected:
+      name: "Poller connected"
+
+sensor:
+  - platform: stream_server
+    connection_count:
+      name: "Active connections"
+  - platform: wifi_signal
+    name: "WiFi signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP address"
+  - platform: version
+    name: "ESPHome version"
