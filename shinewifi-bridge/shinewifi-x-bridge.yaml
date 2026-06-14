@@ -1,10 +1,11 @@
 substitutions:
   name: shinewifi-x-1
   friendly_name: "Growatt ShineWiFi-X Bridge 1"
-  # ESP module variant:
-  #   esp07s -> older ShineWiFi-X (1MB flash)
-  #   esp12e -> newer 4MB-flash boards
-  board: esp07s
+  # ESP module variant. Confirmed by flash-id on a real unit: ESP8266EX with 4MB
+  # flash -> esp12e. Older 1MB ShineWiFi-X boards use esp07s; check your board.
+  #   esp12e -> 4MB-flash boards (the unit we backed up)
+  #   esp07s -> older 1MB-flash boards
+  board: esp12e
 
 esphome:
   name: ${name}

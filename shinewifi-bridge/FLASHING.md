@@ -5,25 +5,36 @@ One-time serial flash. After that, updates are OTA (`esphome run` over the netwo
 ## 0. Back up the stock firmware first (do this!)
 
 This makes the reflash reversible. If anything goes wrong, or you ever want ShinePhone
-back, you can restore the original image. Read the full flash before you write anything:
+back, you can restore the original image. Read the full flash before you write anything.
+`ALL` lets esptool auto-detect the size so you do not have to guess 1MB vs 4MB:
 
 ```bash
-# 1MB (esp07s) board:
-esptool.py --port /dev/ttyUSB0 --baud 115200 read_flash 0x0 0x100000 shinewifi-x-stock-1MB.bin
-
-# 4MB (esp12e) board:
-esptool.py --port /dev/ttyUSB0 --baud 115200 read_flash 0x0 0x400000 shinewifi-x-stock-4MB.bin
+# esptool v5 (hyphenated commands). CP2102 adapters have no auto-reset, so --before no-reset.
+esptool --port /dev/ttyUSB0 --baud 115200 --before no-reset read-flash 0x0 ALL \
+  firmware-backups/shinewifi-x-stock.bin
 ```
 
-Store these `.bin` files somewhere safe (they are git-ignored here). Restore with
-`write_flash 0x0 <file>`.
+Store these `.bin` files somewhere safe (the `firmware-backups/` dir here is git-ignored).
+Restore with `write-flash 0x0 <file>`.
+
+> **Hard-won lessons (a real ESP-07 / 4MB unit on a CP2102):**
+> - **Pick one baud and keep it for the whole command.** Bumping mid-session (e.g. to
+>   460800 after a slower connect) drops sync and you get `No serial data received`.
+>   115200 is reliable; 230400 usually works and is ~2x faster. 460800 was flaky here.
+> - `flash-id` succeeding (it prints chip type, MAC, flash size) **proves the wiring,
+>   power and ground are all correct** - if that works, a failed read is a baud or
+>   bootloader-state issue, not wiring.
 
 ## 1. Open the dongle and identify the module
 
 Crack the case and find the ESP8266 module:
 
-- **ESP07 / ESP07S** (1MB) -> keep `board: esp07s` in the YAML substitutions.
-- **ESP12E** (4MB) -> set `board: esp12e`.
+- **ESP07 / ESP07S** (1MB) -> set `board: esp07s` in the YAML substitutions.
+- **ESP12E** (4MB) -> `board: esp12e`.
+
+The first unit we backed up reported **ESP8266EX with 4MB flash** via `flash-id`, so the
+YAML defaults to `esp12e`. Confirm yours with `flash-id` (it prints the detected size)
+rather than guessing from the module label.
 
 While you're in there, note the USB-serial chip (CH340 or XR21V1410) and **trace where
 the USB-A connector pins go**. This answers the open question below.
@@ -45,9 +56,17 @@ The ESP's programming UART is GPIO1 (TX) / GPIO3 (RX), 3.3V TTL. Two possible ro
 
 ## 3. Enter bootloader (flash) mode
 
-Hold **GPIO0 to GND while powering on** the board. On the ShineWiFi-X you bridge the
-header's GPIO0 and GND pins as you plug it in / apply power. Release after power-up. The
-ESP is now in serial bootloader mode.
+Hold **GPIO0 to GND while powering on** the board, GPIO0 is only sampled at power-up.
+When the CP2102 supplies the board's power (common), the USB plug-in *is* the power-up,
+so bridge GPIO0 to GND **before** plugging the CP2102 in. You can leave the jumper on for
+the whole esptool session (reads/writes work fine with GPIO0 still grounded); you only
+**must remove it after flashing**, before the final power-cycle, so it boots the new
+firmware instead of back into the bootloader.
+
+Because CP2102 boards usually do not wire DTR/RTS, esptool cannot reset the chip itself,
+hence `--before no-reset` and the manual power-cycle. If a command says `No serial data
+received`, the chip booted to firmware before esptool connected: re-plug with GPIO0 held
+and run it again.
 
 ## 4. Flash
 
