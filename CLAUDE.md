@@ -37,6 +37,9 @@ Inverter --RS485--> Elfin EW11 (TCP server :502) --Modbus TCP--> growatt_modbus.
 - `Dockerfile` / `docker-compose.yaml` - the poller image (mounts `./config` at `/config`).
 - `Dockerfile.control` / `deploy/control/` - the control image (FROM `lighttpd-chainguard`,
   bakes the CGI + lib + lighttpd.conf) and its deploy compose.
+- `shinewifi-bridge/` - ESPHome firmware to reflash a Growatt ShineWiFi-X dongle into a
+  dumb serial-to-TCP Modbus bridge (an EW11 alternative; the dongles are what's deployed
+  now). Self-contained: see its `README.md`, `FLASHING.md`, and `POLLER-INTEGRATION.md`.
 - `*.pdf` - Growatt and ESS Modbus protocol manuals (reference for the register maps).
 - `find_fields.py` / `old_fields.json` - throwaway helpers used while reverse
   engineering the register set. Not part of the runtime.

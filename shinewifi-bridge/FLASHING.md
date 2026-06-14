@@ -36,23 +36,19 @@ The first unit we backed up reported **ESP8266EX with 4MB flash** via `flash-id`
 YAML defaults to `esp12e`. Confirm yours with `flash-id` (it prints the detected size)
 rather than guessing from the module label.
 
-While you're in there, note the USB-serial chip (CH340 or XR21V1410) and **trace where
-the USB-A connector pins go**. This answers the open question below.
+## 2. Reach the ESP for flashing
 
-## 2. Decide how to reach the ESP for flashing
+The ESP's programming UART is GPIO1 (TX) / GPIO3 (RX), 3.3V TTL.
 
-The ESP's programming UART is GPIO1 (TX) / GPIO3 (RX), 3.3V TTL. Two possible routes:
+**The proven route here: an external 3.3V USB-UART adapter on the ESP's header pads.**
+Clip a 3.3V adapter (we used a CP2102) onto the ESP's TX / RX / GND / 3V3 pads directly.
+Cross TX/RX (adapter TX -> ESP RX/GPIO3, adapter RX -> ESP TX/GPIO1) and share grounds.
+**Never use a 5V adapter**, it will damage the ESP. The CP2102 also powers the board over
+those pads, so "power-cycle" = unplug/replug the adapter (see step 3).
 
-- **Via the USB-A connector** - *if* the onboard CH340/XR21V1410 is wired between the USB
-  connector and the ESP UART, plugging the dongle into this machine's USB will enumerate
-  as a serial device (`/dev/ttyUSB0` or `/dev/ttyACM0`) and you can flash straight in.
-  This is the convenient path **if the wiring supports it** - confirm by tracing in step 1
-  (or just plug in and see whether a serial device appears).
-- **Via the header/pads** - otherwise, clip a 3.3V USB-UART adapter (FTDI/CP2102) onto the
-  ESP's TX/RX/GND/3V3 pads directly. **Never use a 5V adapter**, it will damage the ESP.
-
-> Open question to settle on the first dongle: which route works on your boards. Update
-> this file with the answer once confirmed.
+> The onboard CH340/XR21V1410 *might* let you flash straight through the USB-A connector
+> on some board revisions, but that was not needed or tested here. The header pads are the
+> reliable route; use them unless you have a reason not to.
 
 ## 3. Enter bootloader (flash) mode
 
