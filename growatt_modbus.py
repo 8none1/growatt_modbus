@@ -215,10 +215,10 @@ def get_inverter_time(client):
     if not registers:
         return None
     year, month, day, hour, minute, second, _dow = registers
-    # The inverter stores the year as two digits (e.g. 25 for 2025).
+    # This inverter firmware reports the full 4-digit year in register 45.
     try:
         return datetime.datetime(
-            year + 2000, month, day, hour, minute, second,
+            year, month, day, hour, minute, second,
             tzinfo=datetime.timezone.utc,
         )
     except ValueError as e:
@@ -237,7 +237,9 @@ def sync_inverter_time(client, max_drift_seconds):
     if delta > max_drift_seconds:
         log.warning("Inverter clock drifted %.0fs, correcting to %s",
                     delta, now_utc.isoformat())
-        time_list = [now_utc.year - 2000, now_utc.month, now_utc.day,
+        # Match the 4-digit year reported on read. NB: writing register 45 is
+        # rejected by some setups (read-only over the EW11), so this may fail.
+        time_list = [now_utc.year, now_utc.month, now_utc.day,
                      now_utc.hour, now_utc.minute, now_utc.second, now_utc.isoweekday()]
         if not write_registers(client, 45, time_list):
             log.warning("Failed to update inverter time")

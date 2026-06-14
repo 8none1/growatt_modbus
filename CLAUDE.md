@@ -36,7 +36,10 @@ Inverter --RS485--> Elfin EW11 (TCP server :502) --Modbus TCP--> growatt_modbus.
 - `read_double_reg(high, low, mult)` combines two 16-bit registers into a 32-bit value
   (`high << 16 | low`) and scales it. Most powers/energies use a `0.1` multiplier.
 - Holding registers: config/settings. Input registers: live telemetry.
-- Inverter RTC year is two digits: reads add 2000, writes subtract 2000.
+- Inverter RTC: this firmware reports the full 4-digit year in register 45 (some
+  Growatt firmware uses two digits). Writing register 45 to correct drift is rejected
+  on the current EW11 setup, so time-sync logs a warning when it tries; investigate
+  whether the register is writable over this path.
 - `SENSOR_META` is the curated field -> (name, device_class, unit, state_class) map that
   drives HA discovery. Fields not listed are still published in the state payload, they
   just do not get an HA entity. Add to this map to expose more sensors.
