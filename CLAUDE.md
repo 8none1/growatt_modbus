@@ -49,34 +49,38 @@ Inverter --RS485--> Elfin EW11 (TCP server :502) --Modbus TCP--> growatt_modbus.
   just do not get an HA entity. Add to this map to expose more sensors.
 - The map is verified against a real SPH but is not exhaustive; the PDFs are the source
   of truth for anything not yet decoded.
+- See `REGISTERS.md` for the cross-referenced register findings: verified registers,
+  known PDF-vs-code discrepancies (naming/scaling, deliberately not auto-applied), and the
+  energy/diagnostic registers added. Treat the running code as ground truth; the PDFs
+  contain translation errors and at least one provably-wrong scaling (battery temperature).
 
 ## Battery / CAN bus
 
-The BMS values (`bms*`, `cellVoltage*`) are read from the inverter's Modbus registers,
-which the inverter populates from the battery. The battery pack itself is believed to
-talk **CAN bus** to the inverter, not Modbus, so it cannot be queried directly over the
-EW11. Reading the pack directly would need a CAN interface, not this tool.
+The BMS values (`bms*`, `maxCellVoltage`/`minCellVoltage`) are read from the inverter's
+Modbus registers, which the inverter populates from the battery. The battery pack talks
+**CAN bus** to the inverter (confirmed: the ESS protocol PDF defines the genuine per-cell
+voltages at `0x0071`+ in the battery's own CAN address space, not in Modbus). The inverter
+only proxies a BMS *summary* (max/min cell voltage, module count) into Modbus, so full
+per-cell detail is not reachable over the EW11; that would need a CAN interface.
 
 ## Deployment (perceptron)
 
-- Git checkout lives at `/home/will/source/growatt_modbus`.
-- `docker-compose.yaml` is symlinked into `/home/will/docker/growatt_modbus/`, and the
-  real `config/config.yaml` lives in that deploy dir (Compose resolves `./config`
-  relative to the symlink's location, i.e. the deploy dir).
-- Images are built and published to GHCR by CI (`.github/workflows/docker-publish.yml`)
-  on push to `main` and on `v*` tags: `ghcr.io/8none1/growatt_modbus:latest`. perceptron
-  no longer builds locally, it just pulls: `docker compose pull && docker compose up -d`.
-  (This sidesteps an old build-context gotcha: with a symlinked compose file, `.` resolved
-  to the deploy dir, which has no Dockerfile, so `docker compose build` there failed.)
+- CI builds and publishes the image to GHCR (`.github/workflows/docker-publish.yml`) on
+  push to `main` and on `v*` tags: `ghcr.io/8none1/growatt_modbus:latest` (public, multi-arch).
+- perceptron does NOT have a source checkout and does not build. The deploy dir
+  `~/docker/growatt_modbus/` holds a standalone `docker-compose.yaml` (referencing the GHCR
+  image) and the real `config/config.yaml`. Deploy/update is just:
+  `cd ~/docker/growatt_modbus && docker compose pull && docker compose up -d`.
 - The MQTT broker and Home Assistant both run on perceptron.
 
 ## Open TODOs
 
-- Investigate the two protocol PDFs to validate and extend the register map (good
-  candidate for a fan-out review). Many registers are still undecoded or guessed.
-- Confirm the CAN-bus battery theory and decide whether a separate CAN reader is worth it.
+- Decide on the PDF-vs-code discrepancies in `REGISTERS.md` (naming/scaling), case by case.
+- Confirm the input 1112-1123 per-cell-voltage hypothesis (observe over a charge/discharge cycle).
+- Optionally decode the system fault words (input 1001-1008) and BMS warning bitfield
+  (1098/1099) into human-readable sensors.
 - Possible future: a proper Home Assistant custom component / HACS integration instead of
-  the MQTT-discovery approach.
+  the MQTT-discovery approach; and a CAN reader for full per-cell battery detail.
 
 ## Conventions for changes
 
