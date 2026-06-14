@@ -41,8 +41,9 @@ class InverterControl:
 
     def __init__(self, host, port=502, device_id=1, framer=None, timeout=5):
         self.device_id = device_id
+        # retries: raw RTU-over-TCP dongles occasionally drop/garble a frame.
         kwargs = {"framer": framer} if framer is not None else {}
-        self.client = ModbusTcpClient(host, port=port, timeout=timeout, **kwargs)
+        self.client = ModbusTcpClient(host, port=port, timeout=timeout, retries=3, **kwargs)
         self.connected = self.client.connect()
 
     def close(self):
