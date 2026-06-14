@@ -36,10 +36,14 @@ Inverter --RS485--> Elfin EW11 (TCP server :502) --Modbus TCP--> growatt_modbus.
 - `read_double_reg(high, low, mult)` combines two 16-bit registers into a 32-bit value
   (`high << 16 | low`) and scales it. Most powers/energies use a `0.1` multiplier.
 - Holding registers: config/settings. Input registers: live telemetry.
-- Inverter RTC: this firmware reports the full 4-digit year in register 45 (some
-  Growatt firmware uses two digits). Writing register 45 to correct drift is rejected
-  on the current EW11 setup, so time-sync logs a warning when it tries; investigate
-  whether the register is writable over this path.
+- Inverter RTC (register 45) is asymmetric and verified against a real SPH:
+  - Read returns a full 4-digit year (2026); write expects a 2-digit year (year - 2000).
+    Writing the 4-digit year is rejected with Modbus `IllegalDataValue`.
+  - Time base is UTC. Set with a six-register FC16 write (Y, M, D, h, m, s); the weekday
+    register is left for the inverter to derive. This matches the known-good
+    octopus_agile_battery_scheduler (control_inverter.py).
+  - Earlier "writes fail" symptoms were caused by sending the 4-digit year, not by the
+    register being read-only or by EW11 contention.
 - `SENSOR_META` is the curated field -> (name, device_class, unit, state_class) map that
   drives HA discovery. Fields not listed are still published in the state payload, they
   just do not get an HA entity. Add to this map to expose more sensors.

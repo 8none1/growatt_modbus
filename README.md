@@ -125,8 +125,10 @@ The decoding logic lives in `growatt_modbus.py`. A few conventions worth knowing
 
 - 32-bit values span two 16-bit registers and are combined with `read_double_reg()`
   (`high << 16 | low`), then scaled by a multiplier (commonly `0.1`).
-- This inverter firmware reports the full 4-digit year in the RTC register. (Some
-  Growatt firmware uses two digits, so check yours if the time looks wrong.)
+- The RTC (register 45) is asymmetric: the inverter **reports** a full 4-digit year
+  on read, but **expects** a 2-digit year (`year - 2000`) on write. Time is held in
+  **UTC**, and the clock is set with a six-register FC16 write (year, month, day, hour,
+  minute, second). Writing the full 4-digit year is rejected with `IllegalDataValue`.
 - Full register definitions are in the Growatt Modbus protocol PDFs in this repo. The
   field map here is a curated subset that has been verified against a real SPH; it is not
   exhaustive.
