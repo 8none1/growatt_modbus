@@ -102,6 +102,47 @@ the daily AC figure.
 - `maxCellVoltage` / `minCellVoltage` (input 1108/1109): cell spread is the clearest early
   warning of an imbalanced or failing cell.
 
+## Charge / discharge scheduling (time-of-use slots)
+
+The SPH schedules battery charging and grid discharge in time slots, each stored as three
+holding registers: **start time, end time, enable**. Times are encoded as `hour << 8 | minute`
+(hour in the high byte, minute in the low byte); enable is `0`/`1`.
+
+**The authoritative reference is the working CGI script on perceptron:**
+`~/docker/lighttpd/www/cgi-bin/switch_inverter_mode.py` (runs in the `lighttpd-web-1` container).
+It both reads the slots and is what the `octopus_agile_battery_scheduler` drives to charge during
+cheap Octopus Agile windows.
+
+**Battery First / AC-charge slots** (charge the battery; pull from grid here if AC charge is on
+and solar is insufficient):
+
+| Slot | start / end / enable registers |
+| ---- | ------------------------------ |
+| 1 | 1100 / 1101 / 1102 |
+| 2 | 1103 / 1104 / 1105 |
+| 3 | 1106 / 1107 / 1108 |
+| 4 | 1018 / 1019 / 1020 |
+| 5 | 1021 / 1022 / 1023 |
+| 6 | 1024 / 1025 / 1026 |
+
+> **The Growatt PDF is off by one for slots 4-6**: it lists them starting at 1017, but the real
+> start register is **1018**. (Reading from 1017 makes a slot's end-time look like its enable, which
+> is misleading.) Slots 1-3 (the 1100 block) match the PDF.
+
+**Grid First (forced discharge to grid) slot 1**: 1080 / 1081 / 1082.
+
+**AC-charge controls:**
+- `1044` priorityMode (0 = Load First, 1 = Battery First, 2 = Grid First)
+- `1090` battery charge power rate (%)
+- `1091` stop-charge SOC (%) — at 100 it tops the battery right up
+- `1092` AC charge enable (1 = grid charging allowed)
+- `1070` / `1071` Grid First discharge rate (%) / stop-discharge SOC (%)
+
+To stop grid charging in a slot, set that slot's enable register to 0 (e.g. slot 2 → write
+`1105 = 0`), or set `1092 = 0` to disable AC charging entirely. An enabled afternoon Battery-First
+slot is usually the Agile scheduler working as intended (it writes `start = now, end = now + duration`
+for a cheap window), not a fault.
+
 ## Not yet pursued
 - Decoding the system fault words (input 1001-1008) and BMS warning bitfield (1098/1099)
   into human-readable fault/warning sensors.
