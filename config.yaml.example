@@ -33,3 +33,10 @@ mqtt:
 time_sync:
   enabled: true              # correct the inverter RTC if it drifts
   max_drift_seconds: 60      # only rewrite the clock if drift exceeds this
+
+# Used by the control CGI (switch_inverter_mode.py) to pick which inverter to
+# command, i.e. the one with the battery. Only the host is needed here; the
+# AC-charge tunables stay in code.
+control:
+  device: inverter1          # name from the devices list above (defaults to the first)
+  device_id: 1               # Modbus unit id

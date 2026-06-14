@@ -31,7 +31,24 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "max_drift_seconds": 60,
     },
+    # Used by the control CGI to pick which inverter to command (the one with the
+    # battery). device is the name from the devices list; defaults to the first.
+    "control": {
+        "device": None,
+        "device_id": 1,
+    },
 }
+
+
+def control_target(config):
+    """Resolve (host, port, device_id) for the inverter the control side commands."""
+    devices = config.get("devices") or []
+    if not devices:
+        raise ValueError("No devices configured for control")
+    name = (config.get("control") or {}).get("device")
+    dev = next((d for d in devices if d.get("name") == name), devices[0]) if name else devices[0]
+    device_id = (config.get("control") or {}).get("device_id") or dev.get("unit", 1)
+    return dev["host"], dev.get("port", 502), device_id
 
 
 def _deep_merge(base, override):

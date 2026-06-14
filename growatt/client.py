@@ -18,10 +18,11 @@ def read_double_reg(r1, r2, multiplier=1):
     return value
 
 
-def read_holding_registers(client, start_address, count):
+def read_holding_registers(client, start_address, count, device_id=None):
     """Read holding registers from Modbus. Returns None on error."""
+    kwargs = {} if device_id is None else {"device_id": device_id}
     try:
-        response = client.read_holding_registers(address=start_address, count=count)
+        response = client.read_holding_registers(address=start_address, count=count, **kwargs)
         if response.isError():
             log.warning("Error reading holding registers %s-%s",
                         start_address, start_address + count)
@@ -32,10 +33,11 @@ def read_holding_registers(client, start_address, count):
         return None
 
 
-def read_input_registers(client, start_address, count):
+def read_input_registers(client, start_address, count, device_id=None):
     """Read input registers from Modbus. Returns None on error."""
+    kwargs = {} if device_id is None else {"device_id": device_id}
     try:
-        response = client.read_input_registers(address=start_address, count=count)
+        response = client.read_input_registers(address=start_address, count=count, **kwargs)
         if response.isError():
             log.warning("Error reading input registers %s-%s",
                         start_address, start_address + count)
@@ -46,10 +48,11 @@ def read_input_registers(client, start_address, count):
         return None
 
 
-def write_registers(client, start_address, values):
+def write_registers(client, start_address, values, device_id=None):
     """Write holding registers to Modbus. Returns True on success."""
+    kwargs = {} if device_id is None else {"device_id": device_id}
     try:
-        response = client.write_registers(address=start_address, values=values)
+        response = client.write_registers(address=start_address, values=values, **kwargs)
         if response.isError():
             log.warning("Error writing registers %s-%s",
                         start_address, start_address + len(values) - 1)
@@ -109,3 +112,19 @@ def sync_inverter_time(client, max_drift_seconds):
             log.warning("Failed to update inverter time")
         else:
             log.info("Inverter time updated to %s", now_utc.isoformat())
+
+
+def set_inverter_time(client, device_id=None):
+    """Unconditionally set the inverter RTC to the current UTC time.
+
+    Used by the control side before scheduling, so charge/discharge slots line up
+    with UTC (Octopus Agile prices are UTC). Same 2-digit-year, six-register FC16
+    write as sync_inverter_time.
+    """
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    time_list = [now_utc.year - 2000, now_utc.month, now_utc.day,
+                 now_utc.hour, now_utc.minute, now_utc.second]
+    if write_registers(client, 45, time_list, device_id=device_id):
+        log.info("Inverter time set to %s", now_utc.isoformat())
+    else:
+        log.warning("Failed to set inverter time")
