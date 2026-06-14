@@ -40,15 +40,25 @@ DEFAULT_CONFIG = {
 }
 
 
+def device_framer(dev):
+    """Map a device's optional 'framer' key to a pymodbus framer.
+
+    Default (no key, or anything other than 'rtu') is Modbus TCP / MBAP (the EW11).
+    'rtu' selects raw Modbus-RTU-over-TCP, used by a reflashed ShineWiFi-X dongle.
+    """
+    from pymodbus import FramerType
+    return FramerType.RTU if (dev or {}).get("framer") == "rtu" else FramerType.SOCKET
+
+
 def control_target(config):
-    """Resolve (host, port, device_id) for the inverter the control side commands."""
+    """Resolve (host, port, device_id, framer) for the inverter the control side commands."""
     devices = config.get("devices") or []
     if not devices:
         raise ValueError("No devices configured for control")
     name = (config.get("control") or {}).get("device")
     dev = next((d for d in devices if d.get("name") == name), devices[0]) if name else devices[0]
     device_id = (config.get("control") or {}).get("device_id") or dev.get("unit", 1)
-    return dev["host"], dev.get("port", 502), device_id
+    return dev["host"], dev.get("port", 502), device_id, device_framer(dev)
 
 
 def _deep_merge(base, override):

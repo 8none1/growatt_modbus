@@ -5,16 +5,19 @@
 # How often to poll each inverter, in seconds.
 poll_interval: 10
 
-# One entry per inverter. host is the EW11 bridge (or any Modbus TCP gateway).
+# One entry per inverter. host is the bridge (EW11, or a reflashed ShineWiFi-X dongle).
+# framer: omit (or anything but "rtu") for Modbus TCP/MBAP, as the EW11 presents.
+#         "rtu" for raw Modbus-RTU-over-TCP, as a reflashed ShineWiFi-X dongle presents.
 devices:
   - name: inverter1          # friendly name, used in Home Assistant
     host: ew11-1.example.com
     port: 502
     unit: 1
   - name: inverter2
-    host: ew11-2.example.com
+    host: shinewifi-x-2.example.com
     port: 502
     unit: 1
+    framer: rtu              # reflashed ShineWiFi-X dongle (RTU-over-TCP)
 
 mqtt:
   broker: localhost
