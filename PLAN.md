@@ -1,5 +1,11 @@
 # Plan: consolidate monitoring + control, publish the control script
 
+> **Status: COMPLETE.** All four phases shipped and deployed: shared `growatt/` library,
+> control ported into `growatt/control.py` + CGI, the `growatt_modbus-control` image, and the
+> perceptron cutover (verified GET identical + a live POST write). The lighttpd-chainguard base
+> also got a weekly scheduled rebuild. The old `~/docker/lighttpd` deploy is kept (stopped) for
+> rollback. Kept here as the record of the work.
+
 ## Goal
 Bring the two halves of the solar setup into this one repo behind a shared library:
 - **Monitor** = `growatt_modbus.py` (polls the inverters, publishes MQTT + HA discovery). Already here.
