@@ -73,14 +73,51 @@ per-cell detail is not reachable over the EW11; that would need a CAN interface.
   `cd ~/docker/growatt_modbus && docker compose pull && docker compose up -d`.
 - The MQTT broker and Home Assistant both run on perceptron.
 
-## Open TODOs
+## Open TODOs / remaining work
 
-- Decide on the PDF-vs-code discrepancies in `REGISTERS.md` (naming/scaling), case by case.
-- Confirm the input 1112-1123 per-cell-voltage hypothesis (observe over a charge/discharge cycle).
-- Optionally decode the system fault words (input 1001-1008) and BMS warning bitfield
-  (1098/1099) into human-readable sensors.
-- Possible future: a proper Home Assistant custom component / HACS integration instead of
-  the MQTT-discovery approach; and a CAN reader for full per-cell battery detail.
+Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
+
+**Pending code changes (a "round 2" PR), discussed and agreed in principle:**
+- High-confidence fixes to apply:
+  - Rename `pvBattPower` (input 35-36) → AC output power, and `pvOutputCurrent` (input 39) →
+    AC output current. Confirmed by live maths (V×I = the value); the PDF and the existing
+    code names/comment are wrong (they are AC-side, not PV/battery).
+  - Apply scaling: `inverterNormalVoltage` (holding 8) ×0.1; `inverterPowerFactor`
+    (holding 5) ÷10000 for a real 0-1 PF.
+  - Fix the fault reads: use 105 (fault maincode), 107 (fault subcode), 112 (warn maincode),
+    111 (warn subcode) as separate values instead of the dubious 32-bit `FaultBitCode`
+    (106-107) / `WarningBitCode` (110-111) pairings.
+- Hold until verified live: `ACChargePower` (input 116-117), the PDF says energy (kWh), not
+  power; confirm during a real grid-charge event before renaming/rescaling.
+- `battType` (holding 1048): confirmed Lithium (=1) on this hardware; the input-table enum
+  (1=Lithium) is right, the holding-table enum is wrong. Decide whether to map/expose it.
+- NB: `battTemperature` (input 1040) must stay raw, the PDF's ×0.1 is wrong (live 19 = 19°C).
+
+**Bake / observe (no code yet):**
+- Confirm `bmsReg1112-1123` really are per-cell voltages (watch over a charge/discharge cycle),
+  then rename from raw `bmsReg*` to cell voltages.
+- Watch the combined HA helper `sensor.growatt_site_load_energy_total` tracks total house load
+  sensibly (the "let's try it" one).
+
+**Optional features:**
+- Decode faults into readable sensors: map fault/warn maincodes (105/112) to text via the
+  published Growatt code tables, and bit-decode the BMS error/warn (1085/1099) using the ESS
+  protocol PDF tables (0x0014 protection, 0x0022 warning). The 8 system-fault words
+  (input 1001-1008) are NOT decodable from our manual (it defers to a fault list we lack).
+- Retire the integral-based Grafana energy panels once the register meters are trusted.
+
+**Long-term ("one day"):**
+- A proper Home Assistant custom component / HACS integration instead of MQTT discovery.
+- A CAN-bus reader for full per-cell battery detail (the inverter only proxies a BMS summary
+  over Modbus; true per-cell voltages live in the battery's CAN/ESS protocol at 0x0071+).
+
+**Context worth knowing (see also the memory files):**
+- The charge schedule is owned by Will's `octopus_agile_battery_scheduler` via the CGI
+  `~/docker/lighttpd/www/cgi-bin/switch_inverter_mode.py` on perceptron; it reprograms the
+  Battery-First slots for cheap Agile windows, so manually disabling a slot is only temporary.
+- HA Energy Dashboard now reads the register meters (solar = combined both-inverter site
+  helper; grid/battery = inverter1). Grafana "Solar NEW" dashboard has register-meter cells,
+  a fixed Cell Voltage panel, and a Derating Mode graph.
 
 ## Conventions for changes
 
