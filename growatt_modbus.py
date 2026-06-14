@@ -8,6 +8,7 @@ control side can reuse them.
 """
 
 import os
+import re
 import time
 import json
 import signal
@@ -86,20 +87,33 @@ def publish_discovery(client, mqtt_cfg, serial, device_name):
 # ---------------------------------------------------------------------------
 def poll_device(dev, config, mqtt_client, discovered):
     """Poll a single inverter and publish its data."""
-    client = ModbusTcpClient(host=dev["host"], port=dev.get("port", 502), framer=device_framer(dev))
+    # retries + a slightly longer timeout: raw RTU-over-TCP dongles occasionally drop or
+    # garble a frame (no on-device retry/reassembly like the EW11 had).
+    client = ModbusTcpClient(host=dev["host"], port=dev.get("port", 502),
+                             framer=device_framer(dev), timeout=5, retries=3)
     if not client.connect():
         log.warning("Failed to connect to Modbus device %s", dev["host"])
         return
     try:
-        serial_number = get_inverter_serial_number(client)
+        serial_number = (get_inverter_serial_number(client) or "").strip()
+        # Guard against a garbled/blank serial read: publishing under it would create a
+        # phantom HA device (e.g. 'unknown_serial') with retained entities.
+        if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
+            log.warning("Bad/blank serial from %s (%r), skipping cycle", dev["host"], serial_number)
+            return
         log.info("Device %s serial number: %s", dev["host"], serial_number)
 
         if config["time_sync"]["enabled"]:
             sync_inverter_time(client, config["time_sync"]["max_drift_seconds"])
 
         holding_registers = read_inverter_holding_registers(client)
-        holding_registers['serialNumber'] = serial_number
         input_registers = read_inverter_input_registers(client)
+        # All-or-nothing: a failed read returns None; skip the cycle rather than publish
+        # partial data (and don't poison `discovered` / retained state).
+        if holding_registers is None or input_registers is None:
+            log.warning("Incomplete read from %s, skipping cycle", dev["host"])
+            return
+        holding_registers['serialNumber'] = serial_number
         input_registers['serialNumber'] = serial_number
 
         mqtt_cfg = config["mqtt"]
