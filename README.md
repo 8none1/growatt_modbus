@@ -1,23 +1,29 @@
-# Growatt Modbus to MQTT bridge
+# Growatt Modbus tools (monitor + control)
 
-A small Python service that polls one or more **Growatt SPH** hybrid inverters over
-Modbus TCP, decodes the registers into friendly metrics, and publishes them to MQTT.
-It can also auto-correct the inverter's clock and publish
-[Home Assistant MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
-configs so every sensor appears in Home Assistant with no manual YAML.
+Talk to one or more **Growatt SPH** hybrid inverters over Modbus, with two services that
+share a common `growatt/` Python library:
+
+- **Monitor** (`growatt_modbus.py`): polls the inverters, decodes the registers into friendly
+  metrics, publishes them to MQTT, auto-corrects the inverter clock, and publishes
+  [Home Assistant MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
+  configs so every sensor appears in Home Assistant with no manual YAML.
+- **Control** (`cgi/switch_inverter_mode.py`): a small HTTP/CGI endpoint to switch the battery
+  inverter between Battery / Grid / Load First and manage the AC-charge time slots. Driven by
+  Home Assistant `rest_command`s and an Octopus Agile cheap-rate charging scheduler.
 
 ```
-  Growatt SPH inverter
+  Growatt SPH inverter(s)
         │  RS485 (SYS / COM port)
         ▼
-  Elfin EW11 (WiFi ↔ RS485 bridge, TCP server on :502)
-        │  Modbus TCP over your LAN
-        ▼
-  growatt_modbus.py  (this service)
-        │  MQTT
-        ├──► growatt/<serial>/state        (retained JSON, one per inverter)
-        ├──► growatt                        (legacy flat topic, back-compat)
-        └──► homeassistant/sensor/...       (HA discovery, retained)
+  Bridge: Elfin EW11  or  reflashed ShineWiFi-X dongle   (TCP server on :502)
+        │  Modbus over your LAN  (TCP/MBAP for the EW11, RTU-over-TCP for a dongle)
+        ├───────────────────────────────┬───────────────────────────────┐
+        ▼                                ▼                                
+  growatt_modbus.py (monitor)     cgi/switch_inverter_mode.py (control)
+        │  MQTT                          │  HTTP (HA rest_commands + Agile scheduler)
+        ├──► growatt/<serial>/state      └──► writes mode / AC-charge slots to the inverter
+        ├──► growatt   (legacy topic)
+        └──► homeassistant/sensor/...   (HA discovery)
 ```
 
 ## Why
@@ -146,9 +152,32 @@ With `mqtt.discovery: true` and the
 the same broker, a **Growatt** device appears automatically with all the sensors
 populated and correct units / device classes. No `configuration.yaml` editing required.
 
+## Controlling the inverter
+
+Besides reading, the repo ships a control endpoint (`cgi/switch_inverter_mode.py`) that *writes*
+to the battery inverter. It is served by a small hardened lighttpd image,
+`ghcr.io/8none1/growatt_modbus-control`, built from `Dockerfile.control` on the
+[`lighttpd-chainguard`](https://github.com/8none1/lighttpd-chainguard) base, and shares the same
+`growatt/` library and `config.yaml` as the poller (the `control:` section in the config picks
+which inverter to command).
+
+- **GET** `?action=get_all_slots` returns the current Battery-First / Grid-First time slots as JSON.
+- **POST** `{"action": ...}` switches mode or edits the AC-charge slots:
+  - `switch_inverter_to_batt_first_mode` (`duration`, `slot_num`) - charge from the grid for a window
+  - `switch_inverter_to_grid_first_mode` (`duration`) - force-discharge to the grid
+  - `switch_inverter_to_load_first_mode` - return to normal (self-use)
+  - `disable_batt_first_slot` (`slot_num`), `clear_all_slots`
+
+Home Assistant drives these via `rest_command`s, and an Octopus Agile scheduler POSTs to it to
+charge the battery during cheap half-hours. The deploy compose is in
+[`deploy/control/`](deploy/control/). The AC-charge tuning values (charge rate, stop-SOC) are
+intentionally hard-coded in `growatt/control.py`; only the inverter host comes from config.
+
 ## Register notes
 
-The decoding logic lives in `growatt_modbus.py`. A few conventions worth knowing:
+The decoding lives in the shared `growatt/` package (`growatt/monitor.py`); see also
+[`REGISTERS.md`](REGISTERS.md) for the cross-referenced register map and the known PDF-vs-code
+discrepancies. A few conventions worth knowing:
 
 - 32-bit values span two 16-bit registers and are combined with `read_double_reg()`
   (`high << 16 | low`), then scaled by a multiplier (commonly `0.1`).
