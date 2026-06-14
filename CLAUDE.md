@@ -4,9 +4,13 @@ Context for Claude (and humans) working on this repo.
 
 ## What this is
 
-A single-purpose service (`growatt_modbus.py`) that polls Growatt SPH inverters over
-Modbus TCP and publishes the decoded registers to MQTT, with optional Home Assistant
-MQTT Discovery and inverter clock syncing. It runs as a Docker container.
+Two services that share one `growatt/` library:
+- **Monitor** (`growatt_modbus.py`): polls Growatt SPH inverters over Modbus TCP and
+  publishes the decoded registers to MQTT, with Home Assistant MQTT Discovery and clock sync.
+- **Control** (`cgi/switch_inverter_mode.py`): an HTTP/CGI endpoint to switch the battery
+  inverter between Battery/Grid/Load First and manage the AC-charge time slots. Driven by
+  Home Assistant rest_commands and the Octopus Agile scheduler. (Formerly a standalone,
+  unversioned CGI on perceptron; consolidated into this repo.)
 
 ## Architecture
 
@@ -22,11 +26,17 @@ Inverter --RS485--> Elfin EW11 (TCP server :502) --Modbus TCP--> growatt_modbus.
 
 ## Key files
 
-- `growatt_modbus.py` - everything: config loading, Modbus decode, MQTT, HA discovery,
-  the poll loop.
+- `growatt/` - shared library: `client.py` (Modbus read/write, time-sync; read/write helpers
+  take an optional `device_id`), `monitor.py` (register decode), `registers.py` (`SENSOR_META`),
+  `config.py` (config loading + `control_target()`), `control.py` (`InverterControl`: mode
+  switches + slot management).
+- `growatt_modbus.py` - the poller: wires config + MQTT + the poll loop around `growatt/`.
+- `cgi/switch_inverter_mode.py` - the control CGI (thin wrapper over `growatt.control`).
 - `config.yaml.example` - annotated config template. Real `config.yaml` is git-ignored.
-- `docker-compose.yaml` / `Dockerfile` - container build and run. Compose mounts
-  `./config` at `/config`.
+  Holds the only host-specific values; the AC-charge tunables stay hard-coded in `control.py`.
+- `Dockerfile` / `docker-compose.yaml` - the poller image (mounts `./config` at `/config`).
+- `Dockerfile.control` / `deploy/control/` - the control image (FROM `lighttpd-chainguard`,
+  bakes the CGI + lib + lighttpd.conf) and its deploy compose.
 - `*.pdf` - Growatt and ESS Modbus protocol manuals (reference for the register maps).
 - `find_fields.py` / `old_fields.json` - throwaway helpers used while reverse
   engineering the register set. Not part of the runtime.
@@ -71,6 +81,12 @@ per-cell detail is not reachable over the EW11; that would need a CAN interface.
   `~/docker/growatt_modbus/` holds a standalone `docker-compose.yaml` (referencing the GHCR
   image) and the real `config/config.yaml`. Deploy/update is just:
   `cd ~/docker/growatt_modbus && docker compose pull && docker compose up -d`.
+- **Control container**: `~/docker/growatt_control/` runs `ghcr.io/8none1/growatt_modbus-control`
+  (the second CI image) on port 8085, mounting the *same* `~/docker/growatt_modbus/config`. HA
+  rest_commands POST to `http://192.168.42.241:8085/cgi-bin/switch_inverter_mode.py`. The CGI is
+  now baked into the image, so it is no longer edited in place; change it in this repo and
+  redeploy via `docker compose pull`. The old `~/docker/lighttpd/` deploy is kept (stopped) for
+  rollback, along with `~/docker/_backups/control-cutover-*`.
 - The MQTT broker and Home Assistant both run on perceptron.
 
 ## Open TODOs / remaining work
