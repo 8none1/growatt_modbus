@@ -1,0 +1,85 @@
+# CLAUDE.md
+
+Context for Claude (and humans) working on this repo.
+
+## What this is
+
+A single-purpose service (`growatt_modbus.py`) that polls Growatt SPH inverters over
+Modbus TCP and publishes the decoded registers to MQTT, with optional Home Assistant
+MQTT Discovery and inverter clock syncing. It runs as a Docker container.
+
+## Architecture
+
+```
+Inverter --RS485--> Elfin EW11 (TCP server :502) --Modbus TCP--> growatt_modbus.py --MQTT--> HA / Grafana / Node-RED
+```
+
+- One `ModbusTcpClient` per inverter per poll (opened and closed each cycle).
+- A single persistent `paho-mqtt` client for the lifetime of the process.
+- Config is external: `config.yaml` (see `config.yaml.example`), resolved from
+  `$GROWATT_CONFIG`, `/config/config.yaml`, then `./config.yaml`, layered over
+  `DEFAULT_CONFIG`, with a few env-var overrides.
+
+## Key files
+
+- `growatt_modbus.py` - everything: config loading, Modbus decode, MQTT, HA discovery,
+  the poll loop.
+- `config.yaml.example` - annotated config template. Real `config.yaml` is git-ignored.
+- `docker-compose.yaml` / `Dockerfile` - container build and run. Compose mounts
+  `./config` at `/config`.
+- `*.pdf` - Growatt and ESS Modbus protocol manuals (reference for the register maps).
+- `find_fields.py` / `old_fields.json` - throwaway helpers used while reverse
+  engineering the register set. Not part of the runtime.
+
+## Register conventions
+
+- `read_double_reg(high, low, mult)` combines two 16-bit registers into a 32-bit value
+  (`high << 16 | low`) and scales it. Most powers/energies use a `0.1` multiplier.
+- Holding registers: config/settings. Input registers: live telemetry.
+- Inverter RTC (register 45) is asymmetric and verified against a real SPH:
+  - Read returns a full 4-digit year (2026); write expects a 2-digit year (year - 2000).
+    Writing the 4-digit year is rejected with Modbus `IllegalDataValue`.
+  - Time base is UTC. Set with a six-register FC16 write (Y, M, D, h, m, s); the weekday
+    register is left for the inverter to derive. This matches the known-good
+    octopus_agile_battery_scheduler (control_inverter.py).
+  - Earlier "writes fail" symptoms were caused by sending the 4-digit year, not by the
+    register being read-only or by EW11 contention.
+- `SENSOR_META` is the curated field -> (name, device_class, unit, state_class) map that
+  drives HA discovery. Fields not listed are still published in the state payload, they
+  just do not get an HA entity. Add to this map to expose more sensors.
+- The map is verified against a real SPH but is not exhaustive; the PDFs are the source
+  of truth for anything not yet decoded.
+
+## Battery / CAN bus
+
+The BMS values (`bms*`, `cellVoltage*`) are read from the inverter's Modbus registers,
+which the inverter populates from the battery. The battery pack itself is believed to
+talk **CAN bus** to the inverter, not Modbus, so it cannot be queried directly over the
+EW11. Reading the pack directly would need a CAN interface, not this tool.
+
+## Deployment (perceptron)
+
+- Git checkout lives at `/home/will/source/growatt_modbus`.
+- `docker-compose.yaml` is symlinked into `/home/will/docker/growatt_modbus/`, and the
+  real `config/config.yaml` lives in that deploy dir (Compose resolves `./config`
+  relative to the symlink's location, i.e. the deploy dir).
+- Images are built and published to GHCR by CI (`.github/workflows/docker-publish.yml`)
+  on push to `main` and on `v*` tags: `ghcr.io/8none1/growatt_modbus:latest`. perceptron
+  no longer builds locally, it just pulls: `docker compose pull && docker compose up -d`.
+  (This sidesteps an old build-context gotcha: with a symlinked compose file, `.` resolved
+  to the deploy dir, which has no Dockerfile, so `docker compose build` there failed.)
+- The MQTT broker and Home Assistant both run on perceptron.
+
+## Open TODOs
+
+- Investigate the two protocol PDFs to validate and extend the register map (good
+  candidate for a fan-out review). Many registers are still undecoded or guessed.
+- Confirm the CAN-bus battery theory and decide whether a separate CAN reader is worth it.
+- Possible future: a proper Home Assistant custom component / HACS integration instead of
+  the MQTT-discovery approach.
+
+## Conventions for changes
+
+- British English in prose, no em dashes (Will's preference).
+- Keep the register decode readable; the aligned-assignment style is intentional.
+- Do not commit a real `config.yaml`; only update `config.yaml.example`.
