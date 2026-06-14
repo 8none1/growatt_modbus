@@ -60,9 +60,14 @@ EW11. Reading the pack directly would need a CAN interface, not this tool.
 ## Deployment (perceptron)
 
 - Git checkout lives at `/home/will/source/growatt_modbus`.
-- `docker-compose.yaml` is symlinked into `/home/will/docker/growatt_modbus/`.
-- Deploy flow: pull, ensure `config/config.yaml` exists, `docker compose build`,
-  `docker compose up -d`. The image is built locally (no CI / registry yet).
+- `docker-compose.yaml` is symlinked into `/home/will/docker/growatt_modbus/`, and the
+  real `config/config.yaml` lives in that deploy dir (Compose resolves `./config`
+  relative to the symlink's location, i.e. the deploy dir).
+- Images are built and published to GHCR by CI (`.github/workflows/docker-publish.yml`)
+  on push to `main` and on `v*` tags: `ghcr.io/8none1/growatt_modbus:latest`. perceptron
+  no longer builds locally, it just pulls: `docker compose pull && docker compose up -d`.
+  (This sidesteps an old build-context gotcha: with a symlinked compose file, `.` resolved
+  to the deploy dir, which has no Dockerfile, so `docker compose build` there failed.)
 - The MQTT broker and Home Assistant both run on perceptron.
 
 ## Open TODOs

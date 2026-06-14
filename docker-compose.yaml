@@ -1,9 +1,8 @@
 services:
   growatt_modbus:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: growatt_modbus:latest
+    # Prebuilt multi-arch image published to GitHub Container Registry by CI.
+    # To build locally instead, see "Build it yourself" in the README.
+    image: ghcr.io/8none1/growatt_modbus:latest
     container_name: growatt_modbus
     network_mode: host  # Host networking: access LAN, host DNS
     volumes:

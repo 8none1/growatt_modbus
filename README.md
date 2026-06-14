@@ -80,14 +80,27 @@ containers.
 
 ### With Docker (recommended)
 
-The compose file mounts `./config` into the container at `/config`:
+A multi-arch image (amd64 and arm64) is published to the GitHub Container Registry, so
+you do not need to build anything. The compose file mounts `./config` into the container
+at `/config`:
 
 ```bash
 mkdir -p config
 cp config.yaml.example config/config.yaml   # then edit config/config.yaml
-docker compose build
+docker compose pull
 docker compose up -d
 docker compose logs -f
+```
+
+To update later, `docker compose pull && docker compose up -d`.
+
+### Build it yourself
+
+If you would rather build the image locally (e.g. you are hacking on the code):
+
+```bash
+docker build -t ghcr.io/8none1/growatt_modbus:latest .
+docker compose up -d        # uses the image you just built
 ```
 
 ### Directly with Python
