@@ -29,9 +29,7 @@ mqtt:
   port: 1883
   username: null             # set if your broker requires auth
   password: null
-  # Original flat topic kept for backwards compatibility (Grafana/Node-RED etc).
-  legacy_topic: growatt
-  # New per-device topic prefix: data is published to <prefix>/<serial>/state.
+  # Per-device topic prefix: data is published to <prefix>/<serial>/state.
   topic_prefix: growatt
   retain: true
   # Home Assistant MQTT discovery.
