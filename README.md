@@ -21,9 +21,9 @@ share a common `growatt/` Python library:
         ▼                                ▼                                
   growatt_modbus.py (monitor)     cgi/switch_inverter_mode.py (control)
         │  MQTT                          │  HTTP (HA rest_commands + Agile scheduler)
-        ├──► growatt/<serial>/state      └──► writes mode / AC-charge slots to the inverter
-        ├──► growatt   (legacy topic)
-        └──► homeassistant/sensor/...   (HA discovery)
+        ├──► growatt/<serial>/state         └──► writes mode / AC-charge slots to the inverter
+        ├──► growatt/<serial>/diagnostics   (read-health counters)
+        └──► homeassistant/sensor/...       (HA discovery)
 ```
 
 ## Why
@@ -82,10 +82,11 @@ $EDITOR config.yaml
 Key options (see `config.yaml.example` for the full annotated file):
 
 - `poll_interval` - seconds between polls.
+- `read_retries` - re-read attempts within a poll cycle before giving up, to ride out the
+  occasional garbled/short frame from a raw RTU-over-TCP dongle (default 3).
 - `devices` - list of inverters: `name`, `host` (the EW11 or dongle), `port`, `unit`, and
   optional `framer: rtu` (set this for a reflashed ShineWiFi-X dongle; omit it for an EW11).
 - `mqtt.broker` / `mqtt.port` / `mqtt.username` / `mqtt.password`.
-- `mqtt.legacy_topic` - the original flat topic, kept for existing consumers.
 - `mqtt.topic_prefix` - per-device data goes to `<prefix>/<serial>/state`.
 - `mqtt.discovery` - publish Home Assistant discovery configs (true/false).
 - `time_sync.enabled` / `time_sync.max_drift_seconds` - correct the inverter RTC if it
@@ -133,17 +134,22 @@ python growatt_modbus.py
 
 ## MQTT output
 
-For each inverter, every poll publishes:
+For each inverter, every successful poll publishes:
 
 - **`growatt/<serial>/state`** - a single retained JSON document with all decoded
-  holding and input registers merged together. This is the topic Home Assistant reads.
-- **`growatt`** (legacy) - the original behaviour: two separate JSON messages (input
-  registers, then holding registers). Kept so existing Grafana / Node-RED pipelines do
-  not break.
+  holding and input registers merged together. This is what Home Assistant and telegraf read.
+- **`growatt/<serial>/diagnostics`** - retained read-health counters for the device
+  (`readErrorsTotal`, `pollSkippedTotal`, `pollOkTotal`, `lastCycleRetries`), so dongle
+  flakiness can be tracked over time. Published every cycle, including ones that failed.
+
+Reads are all-or-nothing. A garbled or short frame from a flaky dongle is rejected (rather
+than decoded into out-of-range nonsense) and re-tried up to `read_retries` times within the
+cycle; if it still fails the whole cycle is skipped rather than publishing partial data.
 
 On startup the service also publishes retained discovery configs under
 `homeassistant/sensor/<serial>_<field>/config` for a curated set of useful sensors
-(PV power, battery SOC, temperatures, grid import/export, etc).
+(PV power, battery SOC, temperatures, grid import/export, etc) plus the read-health
+diagnostic sensors above.
 
 ## Home Assistant
 

@@ -72,9 +72,9 @@ and live data:
 the inverter, not in the inverter's Modbus map. So the full per-cell detail is not reachable over
 the EW11; the inverter only proxies a summary (max/min/count) into Modbus.
 
-> Note: removing `cellVoltage1..16` also removes those keys from the legacy flat `growatt`
-> topic. They were mislabelled and not Home Assistant entities, but check nothing downstream
-> consumed them.
+> Note: removing `cellVoltage1..16` also removes those keys from the published
+> `growatt/<serial>/state` data. They were mislabelled and not Home Assistant entities, but
+> check nothing downstream consumed them.
 
 ## New registers added this round (validated live, all useful)
 
