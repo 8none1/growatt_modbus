@@ -204,15 +204,11 @@ def poll_device(dev, config, mqtt_client, discovered, stats):
 
         retain = mqtt_cfg["retain"]
 
-        # New per-device topic: merged state, retained.
+        # Per-device topic: merged holding+input state, retained. This is the single
+        # source consumed by telegraf and Home Assistant (discovery + manual sensors).
         state = {**holding_registers, **input_registers}
         state_topic = f"{mqtt_cfg['topic_prefix']}/{serial_number}/state"
         mqtt_client.publish(state_topic, json.dumps(state), retain=retain)
-
-        # Legacy flat topic: keep the original two-message behaviour intact.
-        legacy = mqtt_cfg["legacy_topic"]
-        mqtt_client.publish(legacy, json.dumps(input_registers))
-        mqtt_client.publish(legacy, json.dumps(holding_registers))
 
         publish_diagnostics(mqtt_client, mqtt_cfg, st)
 

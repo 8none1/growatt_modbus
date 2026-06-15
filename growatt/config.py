@@ -24,7 +24,6 @@ DEFAULT_CONFIG = {
         "port": 1883,
         "username": None,
         "password": None,
-        "legacy_topic": "growatt",
         "topic_prefix": "growatt",
         "retain": True,
         "discovery_prefix": "homeassistant",
