@@ -27,7 +27,16 @@ def read_holding_registers(client, start_address, count, device_id=None):
             log.warning("Error reading holding registers %s-%s",
                         start_address, start_address + count)
             return None
-        return response.registers
+        registers = response.registers
+        # A garbled/truncated RTU-over-TCP frame can parse as a non-error response with
+        # fewer registers than requested. Reject it here so callers get a clean None
+        # instead of indexing out of range on a short list.
+        if registers is None or len(registers) != count:
+            log.warning("Short holding-register read %s-%s: got %s of %s",
+                        start_address, start_address + count - 1,
+                        0 if registers is None else len(registers), count)
+            return None
+        return registers
     except Exception as e:
         log.warning("Modbus error reading holding registers: %s", e)
         return None
@@ -42,7 +51,16 @@ def read_input_registers(client, start_address, count, device_id=None):
             log.warning("Error reading input registers %s-%s",
                         start_address, start_address + count)
             return None
-        return response.registers
+        registers = response.registers
+        # A garbled/truncated RTU-over-TCP frame can parse as a non-error response with
+        # fewer registers than requested. Reject it here so callers get a clean None
+        # instead of indexing out of range on a short list.
+        if registers is None or len(registers) != count:
+            log.warning("Short input-register read %s-%s: got %s of %s",
+                        start_address, start_address + count - 1,
+                        0 if registers is None else len(registers), count)
+            return None
+        return registers
     except Exception as e:
         log.warning("Modbus error reading input registers: %s", e)
         return None

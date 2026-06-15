@@ -54,6 +54,22 @@ def make_mqtt_client(mqtt_cfg):
     return client
 
 
+# Read-health counters published to a separate per-device diagnostics topic (every cycle,
+# including failed ones). Lets us watch how often / when a dongle garbles or drops frames,
+# so we can decide whether to swap it back for the (very reliable) EW11.
+# key -> (HA name, state_class). Totals are monotonic counters; HA handles restarts.
+DIAGNOSTIC_SENSORS = {
+    "readErrorsTotal":  ("Garbled reads", "total_increasing"),
+    "pollSkippedTotal": ("Skipped polls", "total_increasing"),
+    "pollOkTotal":      ("Successful polls", "total_increasing"),
+    "lastCycleRetries": ("Last poll retries", "measurement"),
+}
+
+
+def diagnostics_topic(mqtt_cfg, serial):
+    return f"{mqtt_cfg['topic_prefix']}/{serial}/diagnostics"
+
+
 def publish_discovery(client, mqtt_cfg, serial, device_name):
     """Publish Home Assistant MQTT discovery configs for known sensors."""
     prefix = mqtt_cfg["discovery_prefix"]
@@ -79,44 +95,113 @@ def publish_discovery(client, mqtt_cfg, serial, device_name):
             config["unit_of_measurement"] = unit
         topic = f"{prefix}/sensor/{serial}_{key}/config"
         client.publish(topic, json.dumps(config), retain=True)
-    log.info("Published HA discovery for %s (%d sensors)", serial, len(SENSOR_META))
+    # Read-health diagnostics: separate state topic, marked as diagnostic entities.
+    diag_topic = diagnostics_topic(mqtt_cfg, serial)
+    for key, (name, state_class) in DIAGNOSTIC_SENSORS.items():
+        config = {
+            "name": name,
+            "unique_id": f"{serial}_{key}",
+            "object_id": f"growatt_{serial}_{key}",
+            "state_topic": diag_topic,
+            "value_template": f"{{{{ value_json.{key} }}}}",
+            "state_class": state_class,
+            "entity_category": "diagnostic",
+            "device": device,
+        }
+        topic = f"{prefix}/sensor/{serial}_{key}/config"
+        client.publish(topic, json.dumps(config), retain=True)
+    log.info("Published HA discovery for %s (%d sensors + %d diagnostics)",
+             serial, len(SENSOR_META), len(DIAGNOSTIC_SENSORS))
+
+
+def publish_diagnostics(client, mqtt_cfg, st):
+    """Publish a device's read-health counters (retained) so HA/Grafana can track flakiness.
+
+    No-op until we have resolved the serial at least once, since the diagnostic entities hang
+    off the HA device keyed by serial; counts accrued before then publish on the next cycle
+    that does resolve it.
+    """
+    serial = st.get("serial")
+    if not serial:
+        return
+    payload = {
+        "serialNumber": serial,
+        "readErrorsTotal": st["readErrorsTotal"],
+        "pollSkippedTotal": st["pollSkippedTotal"],
+        "pollOkTotal": st["pollOkTotal"],
+        "lastCycleRetries": st["lastCycleRetries"],
+    }
+    client.publish(diagnostics_topic(mqtt_cfg, serial), json.dumps(payload), retain=True)
 
 
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
-def poll_device(dev, config, mqtt_client, discovered):
-    """Poll a single inverter and publish its data."""
+def poll_device(dev, config, mqtt_client, discovered, stats):
+    """Poll a single inverter, publish its data, and track read-health counters."""
+    host = dev["host"]
+    st = stats.setdefault(host, {
+        "serial": None,
+        "readErrorsTotal": 0,
+        "pollSkippedTotal": 0,
+        "pollOkTotal": 0,
+        "lastCycleRetries": 0,
+    })
+    mqtt_cfg = config["mqtt"]
+
     # retries + a slightly longer timeout: raw RTU-over-TCP dongles occasionally drop or
     # garble a frame (no on-device retry/reassembly like the EW11 had).
-    client = ModbusTcpClient(host=dev["host"], port=dev.get("port", 502),
+    client = ModbusTcpClient(host=host, port=dev.get("port", 502),
                              framer=device_framer(dev), timeout=5, retries=3)
     if not client.connect():
-        log.warning("Failed to connect to Modbus device %s", dev["host"])
+        log.warning("Failed to connect to Modbus device %s", host)
+        st["pollSkippedTotal"] += 1
+        publish_diagnostics(mqtt_client, mqtt_cfg, st)
         return
     try:
         serial_number = (get_inverter_serial_number(client) or "").strip()
         # Guard against a garbled/blank serial read: publishing under it would create a
         # phantom HA device (e.g. 'unknown_serial') with retained entities.
         if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
-            log.warning("Bad/blank serial from %s (%r), skipping cycle", dev["host"], serial_number)
+            log.warning("Bad/blank serial from %s (%r), skipping cycle", host, serial_number)
+            st["pollSkippedTotal"] += 1
+            publish_diagnostics(mqtt_client, mqtt_cfg, st)
             return
-        log.info("Device %s serial number: %s", dev["host"], serial_number)
+        st["serial"] = serial_number
+        log.info("Device %s serial number: %s", host, serial_number)
 
         if config["time_sync"]["enabled"]:
             sync_inverter_time(client, config["time_sync"]["max_drift_seconds"])
 
-        holding_registers = read_inverter_holding_registers(client)
-        input_registers = read_inverter_input_registers(client)
-        # All-or-nothing: a failed read returns None; skip the cycle rather than publish
-        # partial data (and don't poison `discovered` / retained state).
+        # All-or-nothing: a failed/short read returns None (see client.py); skip the cycle
+        # rather than publish partial data (and don't poison `discovered` / retained state).
+        # A single garbled frame is common on the RTU-over-TCP dongles and pymodbus' own
+        # retries don't catch it, so re-read a few times before giving up, tallying each
+        # failed attempt so we can watch dongle health over time.
+        read_retries = config.get("read_retries", 3)
+        holding_registers = input_registers = None
+        attempts_used = 0
+        for attempt in range(1, read_retries + 1):
+            attempts_used = attempt
+            holding_registers = read_inverter_holding_registers(client)
+            input_registers = read_inverter_input_registers(client)
+            if holding_registers is not None and input_registers is not None:
+                break
+            st["readErrorsTotal"] += 1
+            log.warning("Incomplete read from %s (attempt %d/%d)",
+                        host, attempt, read_retries)
         if holding_registers is None or input_registers is None:
-            log.warning("Incomplete read from %s, skipping cycle", dev["host"])
+            log.warning("Giving up on %s after %d attempt(s), skipping cycle",
+                        host, read_retries)
+            st["pollSkippedTotal"] += 1
+            publish_diagnostics(mqtt_client, mqtt_cfg, st)
             return
+
+        st["pollOkTotal"] += 1
+        st["lastCycleRetries"] = attempts_used - 1
         holding_registers['serialNumber'] = serial_number
         input_registers['serialNumber'] = serial_number
 
-        mqtt_cfg = config["mqtt"]
         retain = mqtt_cfg["retain"]
 
         # New per-device topic: merged state, retained.
@@ -128,6 +213,8 @@ def poll_device(dev, config, mqtt_client, discovered):
         legacy = mqtt_cfg["legacy_topic"]
         mqtt_client.publish(legacy, json.dumps(input_registers))
         mqtt_client.publish(legacy, json.dumps(holding_registers))
+
+        publish_diagnostics(mqtt_client, mqtt_cfg, st)
 
         # Publish HA discovery once per serial per run.
         if mqtt_cfg["discovery"] and serial_number not in discovered:
@@ -144,6 +231,7 @@ def main():
     config = load_config()
     mqtt_client = make_mqtt_client(config["mqtt"])
     discovered = set()
+    stats = {}  # per-host read-health counters, surfaced as HA diagnostic sensors
 
     log.info("Polling %d device(s) every %ss",
              len(config["devices"]), config["poll_interval"])
@@ -151,7 +239,7 @@ def main():
         while not _shutdown:
             for dev in config["devices"]:
                 try:
-                    poll_device(dev, config, mqtt_client, discovered)
+                    poll_device(dev, config, mqtt_client, discovered, stats)
                 except Exception as e:
                     log.exception("Unexpected error polling %s: %s", dev.get("host"), e)
             # Sleep in short slices so a signal interrupts us promptly.

@@ -5,6 +5,11 @@
 # How often to poll each inverter, in seconds.
 poll_interval: 10
 
+# How many times to re-read an inverter within a single poll cycle before giving up.
+# Rides out the occasional garbled/short frame from a raw RTU-over-TCP dongle (the EW11
+# rarely needs this). Defaults to 3 if omitted.
+read_retries: 3
+
 # One entry per inverter. host is the bridge (EW11, or a reflashed ShineWiFi-X dongle).
 # framer: omit (or anything but "rtu") for Modbus TCP/MBAP, as the EW11 presents.
 #         "rtu" for raw Modbus-RTU-over-TCP, as a reflashed ShineWiFi-X dongle presents.

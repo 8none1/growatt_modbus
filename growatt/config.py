@@ -15,6 +15,9 @@ log = logging.getLogger("growatt")
 
 DEFAULT_CONFIG = {
     "poll_interval": 10,
+    # How many times to re-read an inverter within a single poll cycle before giving up,
+    # to ride out the occasional garbled/short frame from a raw RTU-over-TCP dongle.
+    "read_retries": 3,
     "devices": [],
     "mqtt": {
         "broker": "localhost",
