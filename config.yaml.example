@@ -13,11 +13,15 @@ read_retries: 3
 # One entry per inverter. host is the bridge (EW11, or a reflashed ShineWiFi-X dongle).
 # framer: omit (or anything but "rtu") for Modbus TCP/MBAP, as the EW11 presents.
 #         "rtu" for raw Modbus-RTU-over-TCP, as a reflashed ShineWiFi-X dongle presents.
+# serial: optional. The serial is resolved once at startup and cached thereafter (it never
+#         changes), so it is not re-read every cycle. Pin it here to skip even that first
+#         read (handy on a flaky link where the startup serial read can garble a cycle).
 devices:
   - name: inverter1          # friendly name, used in Home Assistant
     host: ew11-1.example.com
     port: 502
     unit: 1
+    # serial: WCK0CDExxx
   - name: inverter2
     host: shinewifi-x-2.example.com
     port: 502
