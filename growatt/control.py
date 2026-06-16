@@ -13,10 +13,28 @@ import logging
 from pymodbus.client import ModbusTcpClient
 
 from .client import read_holding_registers, write_registers, set_inverter_time
+from ._modbus_lock import MODBUS_LOCK
 
 log = logging.getLogger("growatt")
 
 UTC = datetime.timezone.utc
+
+
+def with_control_session(config, fn):
+    """Run fn(inv) against the control inverter inside the global Modbus lock.
+
+    Opens a short-lived InverterControl (one connection), calls fn, and always closes
+    it. Holding MODBUS_LOCK for the whole session means it can never overlap a poll
+    cycle's session, so the dongle never sees two concurrent connections.
+    """
+    from .config import control_target
+    host, port, device_id, framer = control_target(config)
+    with MODBUS_LOCK:
+        inv = InverterControl(host, port, device_id, framer=framer)
+        try:
+            return fn(inv)
+        finally:
+            inv.close()
 
 # Battery First / AC-charge slots: [start, end, enable] registers per slot.
 # NB slots 4-6 start at 1018, not 1017 as the Growatt PDF says.

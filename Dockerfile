@@ -15,5 +15,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY growatt/ ./growatt/
 COPY growatt_modbus.py .
 
+# Control + health HTTP endpoint (served in-process by the poller). Informational
+# under host networking, where the server binds the host's port directly.
+EXPOSE 8085
+
 # Define the command to run the script
 CMD ["python", "growatt_modbus.py"]

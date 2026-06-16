@@ -33,7 +33,16 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "max_drift_seconds": 60,
     },
-    # Used by the control CGI to pick which inverter to command (the one with the
+    # In-process HTTP endpoint for control + health (replaces the old lighttpd/CGI).
+    "http": {
+        "port": 8085,
+    },
+    # /health reports stale (503) if the control inverter has not been read successfully
+    # within this many seconds; otherwise ok (200).
+    "health": {
+        "stale_after_seconds": 600,
+    },
+    # Used by the control endpoint to pick which inverter to command (the one with the
     # battery). device is the name from the devices list; defaults to the first.
     "control": {
         "device": None,
