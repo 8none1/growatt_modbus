@@ -159,16 +159,27 @@ def poll_device(dev, config, mqtt_client, discovered, stats):
         publish_diagnostics(mqtt_client, mqtt_cfg, st)
         return
     try:
-        serial_number = (get_inverter_serial_number(client) or "").strip()
-        # Guard against a garbled/blank serial read: publishing under it would create a
-        # phantom HA device (e.g. 'unknown_serial') with retained entities.
-        if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
-            log.warning("Bad/blank serial from %s (%r), skipping cycle", host, serial_number)
-            st["pollSkippedTotal"] += 1
-            publish_diagnostics(mqtt_client, mqtt_cfg, st)
-            return
-        st["serial"] = serial_number
-        log.info("Device %s serial number: %s", host, serial_number)
+        # An inverter's serial never changes, so resolve it once and then reuse the cached
+        # value every cycle. Re-reading it each poll was wasted work and, worse, a single
+        # garbled serial frame would throw away an otherwise-good cycle (the dominant cause
+        # of the per-inverter metric gaps on the flakier dongle). It can also be pinned in
+        # config (`serial:` per device) to skip even the first read.
+        serial_number = st["serial"] or dev.get("serial")
+        if not serial_number:
+            serial_number = (get_inverter_serial_number(client) or "").strip()
+            # Guard against a garbled/blank serial read: publishing under it would create a
+            # phantom HA device (e.g. 'unknown_serial') with retained entities. Skip the
+            # cycle until we get one clean read; thereafter we never read it again.
+            if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
+                log.warning("Bad/blank serial from %s (%r), skipping cycle until a clean read",
+                            host, serial_number)
+                st["pollSkippedTotal"] += 1
+                publish_diagnostics(mqtt_client, mqtt_cfg, st)
+                return
+        if not st["serial"]:
+            st["serial"] = serial_number
+            log.info("Device %s serial number: %s (cached; not re-read each cycle)",
+                     host, serial_number)
 
         if config["time_sync"]["enabled"]:
             sync_inverter_time(client, config["time_sync"]["max_drift_seconds"])
