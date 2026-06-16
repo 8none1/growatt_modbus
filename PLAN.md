@@ -1,10 +1,13 @@
 # Plan: consolidate monitoring + control, publish the control script
 
-> **Status: COMPLETE.** All four phases shipped and deployed: shared `growatt/` library,
-> control ported into `growatt/control.py` + CGI, the `growatt_modbus-control` image, and the
-> perceptron cutover (verified GET identical + a live POST write). The lighttpd-chainguard base
-> also got a weekly scheduled rebuild. The old `~/docker/lighttpd` deploy is kept (stopped) for
-> rollback. Kept here as the record of the work.
+> **Status: COMPLETE, then SUPERSEDED.** All four phases originally shipped: shared `growatt/`
+> library, control ported into `growatt/control.py` + a CGI, the `growatt_modbus-control` image,
+> and the perceptron cutover. **This two-image design was later replaced (2026-06-16): the CGI
+> and its lighttpd container were folded into the poller process** - one container, one image, an
+> in-process `http.server` (`growatt/http_api.py`) for control + health, and a single
+> `threading.Lock` serialising all Modbus access. See `CLAUDE.md` / `README.md` for the current
+> architecture. This file is kept only as the record of the original consolidation work; the
+> "two images" outcome described below no longer exists.
 
 ## Goal
 Bring the two halves of the solar setup into this one repo behind a shared library:

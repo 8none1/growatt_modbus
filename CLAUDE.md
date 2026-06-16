@@ -31,6 +31,20 @@ Inverter --RS485--> EW11 / reflashed ShineWiFi-X dongle (:502) --Modbus TCP-->  
 - Config is external: `config.yaml` (see `config.yaml.example`), resolved from
   `$GROWATT_CONFIG`, `/config/config.yaml`, then `./config.yaml`, layered over
   `DEFAULT_CONFIG`, with a few env-var overrides.
+- **Reads are validated and all-or-nothing.** `client.py` rejects a read that returns
+  fewer registers than requested (a garbled/short RTU-over-TCP frame can parse as a
+  non-error response), returning `None` instead of letting the decoder index out of range.
+  `poll_device` re-reads up to `read_retries` (default 3) times per cycle before giving up,
+  so one bad frame from a flaky dongle does not blank the inverter for the whole interval.
+- **MQTT output per inverter per cycle:**
+  - `growatt/<serial>/state` - one retained JSON doc, holding+input registers merged. The
+    single source consumed by telegraf (-> InfluxDB measurement `solar_test`) and Home
+    Assistant (discovery + manual sensors).
+  - `growatt/<serial>/diagnostics` - retained read-health counters (`readErrorsTotal`,
+    `pollSkippedTotal`, `pollOkTotal`, `lastCycleRetries`), published every cycle incl.
+    failures, surfaced as HA diagnostic sensors and a Grafana panel.
+  - The old flat `growatt` topic (two separate input/holding messages) was **retired**;
+    all consumers moved to `/state`. Do not reintroduce it.
 
 ## Key files
 
@@ -152,6 +166,12 @@ Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
   then rename from raw `bmsReg*` to cell voltages.
 - Watch the combined HA helper `sensor.growatt_site_load_energy_total` tracks total house load
   sensibly (the "let's try it" one).
+- Watch the read-health diagnostics (`growatt/<serial>/diagnostics`, the HA "Garbled reads /
+  Skipped polls" sensors, and the "Modbus Read Errors" Grafana panel on the Solar NEW dashboard).
+  The dongles are flakier than the EW11s were; if `readErrorsTotal`/`pollSkippedTotal` climb
+  steadily on an inverter, that's the cue to revert that one to its EW11 (see the revert section
+  above). NB the 5-minutely control-healthcheck collisions were eliminated by the poller/control
+  merge, so steady-state garbles should now be near zero.
 
 **Optional features:**
 - Decode faults into readable sensors: map fault/warn maincodes (105/112) to text via the
@@ -166,9 +186,11 @@ Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
   over Modbus; true per-cell voltages live in the battery's CAN/ESS protocol at 0x0071+).
 
 **Context worth knowing (see also the memory files):**
-- The charge schedule is owned by Will's `octopus_agile_battery_scheduler` via the CGI
-  `~/docker/lighttpd/www/cgi-bin/switch_inverter_mode.py` on perceptron; it reprograms the
-  Battery-First slots for cheap Agile windows, so manually disabling a slot is only temporary.
+- The charge schedule is driven by Will's `octopus_agile_battery_scheduler` (a daily cron on
+  perceptron) through Home Assistant automations -> `rest_command`s -> this process's
+  `POST /mode` endpoint; it reprograms the Battery-First slots for cheap Agile windows, so
+  manually disabling/clearing a slot is only temporary. (`script.clear_inverter_charge_slots`
+  in HA wraps the `clear_all_slots` action for a one-click manual clear.)
 - HA Energy Dashboard now reads the register meters (solar = combined both-inverter site
   helper; grid/battery = inverter1). Grafana "Solar NEW" dashboard has register-meter cells,
   a fixed Cell Voltage panel, and a Derating Mode graph.

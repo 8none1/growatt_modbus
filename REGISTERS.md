@@ -72,9 +72,9 @@ and live data:
 the inverter, not in the inverter's Modbus map. So the full per-cell detail is not reachable over
 the EW11; the inverter only proxies a summary (max/min/count) into Modbus.
 
-> Note: removing `cellVoltage1..16` also removes those keys from the legacy flat `growatt`
-> topic. They were mislabelled and not Home Assistant entities, but check nothing downstream
-> consumed them.
+> Note: removing `cellVoltage1..16` also removes those keys from the published
+> `growatt/<serial>/state` data. They were mislabelled and not Home Assistant entities, but
+> check nothing downstream consumed them.
 
 ## New registers added this round (validated live, all useful)
 
@@ -108,10 +108,11 @@ The SPH schedules battery charging and grid discharge in time slots, each stored
 holding registers: **start time, end time, enable**. Times are encoded as `hour << 8 | minute`
 (hour in the high byte, minute in the low byte); enable is `0`/`1`.
 
-**The authoritative reference is the working CGI script on perceptron:**
-`~/docker/lighttpd/www/cgi-bin/switch_inverter_mode.py` (runs in the `lighttpd-web-1` container).
-It both reads the slots and is what the `octopus_agile_battery_scheduler` drives to charge during
-cheap Octopus Agile windows.
+**The authoritative reference is `growatt/control.py`** (the `InverterControl` class). It reads
+the slots (`GET /slots`) and applies the writes (`POST /mode`) that the
+`octopus_agile_battery_scheduler` drives, via Home Assistant, to charge during cheap Octopus
+Agile windows. (Originally a standalone CGI on perceptron; ported into the repo and then merged
+into the poller process.)
 
 **Battery First / AC-charge slots** (charge the battery; pull from grid here if AC charge is on
 and solar is insufficient):

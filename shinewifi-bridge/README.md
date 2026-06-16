@@ -95,7 +95,7 @@ devices:
   case again). See `FLASHING.md`.
 - **Give each dongle a DHCP reservation.** mDNS (`shinewifi-x-1.local`) works fine for you
   and the ESPHome tooling, but it does **not** resolve from inside slim Docker containers
-  (no Avahi), so the poller/control containers must reach the dongle by **IP**. A
+  (no Avahi), so the poller container must reach the dongle by **IP**. A
   reservation keeps that IP stable.
 - **One master per bus.** The inverter's USB/serial and its RS485 port are the same Modbus
   bus, and Modbus is single-master. Never have both a dongle and an EW11 polling the same

@@ -1,8 +1,14 @@
 # Backend integration: the `framer: rtu` knob (hand-off note)
 
+> **Status: IMPLEMENTED.** This shipped: `device_framer()` lives in `growatt/config.py`, a
+> per-device `framer: rtu` key selects RTU-over-TCP, and both dongles run on it in production.
+> `control_target()` now returns the 4-tuple `(host, port, device_id, framer)`. Note also that
+> the separate control CGI/container this note refers to no longer exists - control was merged
+> into the poller process (one `http.server`, see `growatt/http_api.py`). Kept as the record of
+> how the framer support was integrated.
+
 For whoever maintains the Python side (`growatt_modbus.py` + the `growatt/` package).
-This describes a small change that is **coming later**, not yet in the tree, so you can
-plan around it. It will land as its own PR once a reflashed dongle is tested end-to-end.
+This originally described a change that was coming later; it has since landed.
 
 ## TL;DR
 
