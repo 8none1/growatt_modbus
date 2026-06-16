@@ -166,9 +166,11 @@ Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
   over Modbus; true per-cell voltages live in the battery's CAN/ESS protocol at 0x0071+).
 
 **Context worth knowing (see also the memory files):**
-- The charge schedule is owned by Will's `octopus_agile_battery_scheduler` via the CGI
-  `~/docker/lighttpd/www/cgi-bin/switch_inverter_mode.py` on perceptron; it reprograms the
-  Battery-First slots for cheap Agile windows, so manually disabling a slot is only temporary.
+- The charge schedule is driven by Will's `octopus_agile_battery_scheduler` (a daily cron on
+  perceptron) through Home Assistant automations -> `rest_command`s -> this process's
+  `POST /mode` endpoint; it reprograms the Battery-First slots for cheap Agile windows, so
+  manually disabling/clearing a slot is only temporary. (`script.clear_inverter_charge_slots`
+  in HA wraps the `clear_all_slots` action for a one-click manual clear.)
 - HA Energy Dashboard now reads the register meters (solar = combined both-inverter site
   helper; grid/battery = inverter1). Grafana "Solar NEW" dashboard has register-meter cells,
   a fixed Cell Voltage panel, and a Derating Mode graph.
