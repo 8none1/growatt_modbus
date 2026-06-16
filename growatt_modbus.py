@@ -13,6 +13,7 @@ import time
 import json
 import signal
 import logging
+import threading
 
 import paho.mqtt.client as mqtt
 from pymodbus.client import ModbusTcpClient
@@ -24,6 +25,8 @@ from growatt.monitor import (
     read_inverter_holding_registers,
     read_inverter_input_registers,
 )
+from growatt._modbus_lock import MODBUS_LOCK
+from growatt.http_api import make_http_server
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -146,89 +149,97 @@ def poll_device(dev, config, mqtt_client, discovered, stats):
         "pollSkippedTotal": 0,
         "pollOkTotal": 0,
         "lastCycleRetries": 0,
+        # Wall/monotonic clock of the last fully-successful read; drives /health.
+        "lastGoodReadMonotonic": None,
     })
     mqtt_cfg = config["mqtt"]
 
-    # retries + a slightly longer timeout: raw RTU-over-TCP dongles occasionally drop or
-    # garble a frame (no on-device retry/reassembly like the EW11 had).
-    client = ModbusTcpClient(host=host, port=dev.get("port", 502),
-                             framer=device_framer(dev), timeout=5, retries=3)
-    if not client.connect():
-        log.warning("Failed to connect to Modbus device %s", host)
-        st["pollSkippedTotal"] += 1
-        publish_diagnostics(mqtt_client, mqtt_cfg, st)
-        return
-    try:
-        # An inverter's serial never changes, so resolve it once and then reuse the cached
-        # value every cycle. Re-reading it each poll was wasted work and, worse, a single
-        # garbled serial frame would throw away an otherwise-good cycle (the dominant cause
-        # of the per-inverter metric gaps on the flakier dongle). It can also be pinned in
-        # config (`serial:` per device) to skip even the first read.
-        serial_number = st["serial"] or dev.get("serial")
-        if not serial_number:
-            serial_number = (get_inverter_serial_number(client) or "").strip()
-            # Guard against a garbled/blank serial read: publishing under it would create a
-            # phantom HA device (e.g. 'unknown_serial') with retained entities. Skip the
-            # cycle until we get one clean read; thereafter we never read it again.
-            if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
-                log.warning("Bad/blank serial from %s (%r), skipping cycle until a clean read",
-                            host, serial_number)
-                st["pollSkippedTotal"] += 1
-                publish_diagnostics(mqtt_client, mqtt_cfg, st)
-                return
-        if not st["serial"]:
-            st["serial"] = serial_number
-            log.info("Device %s serial number: %s (cached; not re-read each cycle)",
-                     host, serial_number)
-
-        if config["time_sync"]["enabled"]:
-            sync_inverter_time(client, config["time_sync"]["max_drift_seconds"])
-
-        # All-or-nothing: a failed/short read returns None (see client.py); skip the cycle
-        # rather than publish partial data (and don't poison `discovered` / retained state).
-        # A single garbled frame is common on the RTU-over-TCP dongles and pymodbus' own
-        # retries don't catch it, so re-read a few times before giving up, tallying each
-        # failed attempt so we can watch dongle health over time.
-        read_retries = config.get("read_retries", 3)
-        holding_registers = input_registers = None
-        attempts_used = 0
-        for attempt in range(1, read_retries + 1):
-            attempts_used = attempt
-            holding_registers = read_inverter_holding_registers(client)
-            input_registers = read_inverter_input_registers(client)
-            if holding_registers is not None and input_registers is not None:
-                break
-            st["readErrorsTotal"] += 1
-            log.warning("Incomplete read from %s (attempt %d/%d)",
-                        host, attempt, read_retries)
-        if holding_registers is None or input_registers is None:
-            log.warning("Giving up on %s after %d attempt(s), skipping cycle",
-                        host, read_retries)
+    # Serialise the whole Modbus session (connect -> reads -> close) against the control
+    # endpoint, which shares this process and the same dongle. The dongle bridges every
+    # TCP connection onto one serial line with no framing, so two concurrent sessions
+    # garble each other. Holding the lock for the full session = only one connection ever.
+    with MODBUS_LOCK:
+        # retries + a slightly longer timeout: raw RTU-over-TCP dongles occasionally drop or
+        # garble a frame (no on-device retry/reassembly like the EW11 had).
+        client = ModbusTcpClient(host=host, port=dev.get("port", 502),
+                                 framer=device_framer(dev), timeout=5, retries=3)
+        if not client.connect():
+            log.warning("Failed to connect to Modbus device %s", host)
             st["pollSkippedTotal"] += 1
             publish_diagnostics(mqtt_client, mqtt_cfg, st)
             return
+        try:
+            # An inverter's serial never changes, so resolve it once and then reuse the cached
+            # value every cycle. Re-reading it each poll was wasted work and, worse, a single
+            # garbled serial frame would throw away an otherwise-good cycle (the dominant cause
+            # of the per-inverter metric gaps on the flakier dongle). It can also be pinned in
+            # config (`serial:` per device) to skip even the first read.
+            serial_number = st["serial"] or dev.get("serial")
+            if not serial_number:
+                serial_number = (get_inverter_serial_number(client) or "").strip()
+                # Guard against a garbled/blank serial read: publishing under it would create a
+                # phantom HA device (e.g. 'unknown_serial') with retained entities. Skip the
+                # cycle until we get one clean read; thereafter we never read it again.
+                if not re.fullmatch(r"[A-Za-z0-9]{6,}", serial_number) or serial_number == "unknown_serial":
+                    log.warning("Bad/blank serial from %s (%r), skipping cycle until a clean read",
+                                host, serial_number)
+                    st["pollSkippedTotal"] += 1
+                    publish_diagnostics(mqtt_client, mqtt_cfg, st)
+                    return
+            if not st["serial"]:
+                st["serial"] = serial_number
+                log.info("Device %s serial number: %s (cached; not re-read each cycle)",
+                         host, serial_number)
 
-        st["pollOkTotal"] += 1
-        st["lastCycleRetries"] = attempts_used - 1
-        holding_registers['serialNumber'] = serial_number
-        input_registers['serialNumber'] = serial_number
+            if config["time_sync"]["enabled"]:
+                sync_inverter_time(client, config["time_sync"]["max_drift_seconds"])
 
-        retain = mqtt_cfg["retain"]
+            # All-or-nothing: a failed/short read returns None (see client.py); skip the cycle
+            # rather than publish partial data (and don't poison `discovered` / retained state).
+            # A single garbled frame is common on the RTU-over-TCP dongles and pymodbus' own
+            # retries don't catch it, so re-read a few times before giving up, tallying each
+            # failed attempt so we can watch dongle health over time.
+            read_retries = config.get("read_retries", 3)
+            holding_registers = input_registers = None
+            attempts_used = 0
+            for attempt in range(1, read_retries + 1):
+                attempts_used = attempt
+                holding_registers = read_inverter_holding_registers(client)
+                input_registers = read_inverter_input_registers(client)
+                if holding_registers is not None and input_registers is not None:
+                    break
+                st["readErrorsTotal"] += 1
+                log.warning("Incomplete read from %s (attempt %d/%d)",
+                            host, attempt, read_retries)
+            if holding_registers is None or input_registers is None:
+                log.warning("Giving up on %s after %d attempt(s), skipping cycle",
+                            host, read_retries)
+                st["pollSkippedTotal"] += 1
+                publish_diagnostics(mqtt_client, mqtt_cfg, st)
+                return
 
-        # Per-device topic: merged holding+input state, retained. This is the single
-        # source consumed by telegraf and Home Assistant (discovery + manual sensors).
-        state = {**holding_registers, **input_registers}
-        state_topic = f"{mqtt_cfg['topic_prefix']}/{serial_number}/state"
-        mqtt_client.publish(state_topic, json.dumps(state), retain=retain)
+            st["pollOkTotal"] += 1
+            st["lastCycleRetries"] = attempts_used - 1
+            st["lastGoodReadMonotonic"] = time.monotonic()
+            holding_registers['serialNumber'] = serial_number
+            input_registers['serialNumber'] = serial_number
 
-        publish_diagnostics(mqtt_client, mqtt_cfg, st)
+            retain = mqtt_cfg["retain"]
 
-        # Publish HA discovery once per serial per run.
-        if mqtt_cfg["discovery"] and serial_number not in discovered:
-            publish_discovery(mqtt_client, mqtt_cfg, serial_number, dev.get("name"))
-            discovered.add(serial_number)
-    finally:
-        client.close()
+            # Per-device topic: merged holding+input state, retained. This is the single
+            # source consumed by telegraf and Home Assistant (discovery + manual sensors).
+            state = {**holding_registers, **input_registers}
+            state_topic = f"{mqtt_cfg['topic_prefix']}/{serial_number}/state"
+            mqtt_client.publish(state_topic, json.dumps(state), retain=retain)
+
+            publish_diagnostics(mqtt_client, mqtt_cfg, st)
+
+            # Publish HA discovery once per serial per run.
+            if mqtt_cfg["discovery"] and serial_number not in discovered:
+                publish_discovery(mqtt_client, mqtt_cfg, serial_number, dev.get("name"))
+                discovered.add(serial_number)
+        finally:
+            client.close()
 
 
 def main():
@@ -239,6 +250,12 @@ def main():
     mqtt_client = make_mqtt_client(config["mqtt"])
     discovered = set()
     stats = {}  # per-host read-health counters, surfaced as HA diagnostic sensors
+
+    # Control + health HTTP endpoint (formerly a separate lighttpd/CGI container). Runs in
+    # a daemon thread; it shares `stats` (for /health) and the global Modbus lock with the
+    # poll loop below, so control writes can never collide with a poll on the dongle.
+    http_server = make_http_server(config, mqtt_client, stats)
+    threading.Thread(target=http_server.serve_forever, name="http", daemon=True).start()
 
     log.info("Polling %d device(s) every %ss",
              len(config["devices"]), config["poll_interval"])
@@ -255,6 +272,7 @@ def main():
                     break
                 time.sleep(1)
     finally:
+        http_server.shutdown()
         mqtt_client.loop_stop()
         mqtt_client.disconnect()
         log.info("Stopped")

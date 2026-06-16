@@ -44,9 +44,21 @@ time_sync:
   enabled: true              # correct the inverter RTC if it drifts
   max_drift_seconds: 60      # only rewrite the clock if drift exceeds this
 
-# Used by the control CGI (switch_inverter_mode.py) to pick which inverter to
-# command, i.e. the one with the battery. Only the host is needed here; the
-# AC-charge tunables stay in code.
+# In-process HTTP endpoint for control + health (replaces the old lighttpd/CGI
+# container). Served by the poller itself. Endpoints: GET /health, GET /slots,
+# POST /mode {"action": ...}.
+http:
+  port: 8085
+
+# /health reports 503 (stale) if the control inverter has not been read
+# successfully within this many seconds, else 200 (ok). Comfortably above the
+# poll_interval plus a few retry cycles.
+health:
+  stale_after_seconds: 600
+
+# Used by the control endpoint (/mode, /slots) to pick which inverter to command,
+# i.e. the one with the battery. Only the host is needed here; the AC-charge
+# tunables stay in code.
 control:
   device: inverter1          # name from the devices list above (defaults to the first)
   device_id: 1               # Modbus unit id

@@ -1,15 +1,19 @@
 # Growatt Modbus tools (monitor + control)
 
-Talk to one or more **Growatt SPH** hybrid inverters over Modbus, with two services that
-share a common `growatt/` Python library:
+Talk to one or more **Growatt SPH** hybrid inverters over Modbus. A single process
+(`growatt_modbus.py`), built on the `growatt/` Python library, does two jobs:
 
-- **Monitor** (`growatt_modbus.py`): polls the inverters, decodes the registers into friendly
+- **Monitor** (the poll loop): polls the inverters, decodes the registers into friendly
   metrics, publishes them to MQTT, auto-corrects the inverter clock, and publishes
   [Home Assistant MQTT Discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
   configs so every sensor appears in Home Assistant with no manual YAML.
-- **Control** (`cgi/switch_inverter_mode.py`): a small HTTP/CGI endpoint to switch the battery
+- **Control** (`growatt/http_api.py`, an in-process HTTP server on :8085): switch the battery
   inverter between Battery / Grid / Load First and manage the AC-charge time slots. Driven by
   Home Assistant `rest_command`s and an Octopus Agile cheap-rate charging scheduler.
+
+Both run in one process so a single `threading.Lock` serialises all Modbus access to the
+shared dongle (which has no on-device request/response framing), and `/health` can report
+from an in-memory "last good read" timestamp without touching the inverter.
 
 ```
   Growatt SPH inverter(s)
@@ -17,13 +21,10 @@ share a common `growatt/` Python library:
         ▼
   Bridge: Elfin EW11  or  reflashed ShineWiFi-X dongle   (TCP server on :502)
         │  Modbus over your LAN  (TCP/MBAP for the EW11, RTU-over-TCP for a dongle)
-        ├───────────────────────────────┬───────────────────────────────┐
-        ▼                                ▼                                
-  growatt_modbus.py (monitor)     cgi/switch_inverter_mode.py (control)
-        │  MQTT                          │  HTTP (HA rest_commands + Agile scheduler)
-        ├──► growatt/<serial>/state      └──► writes mode / AC-charge slots to the inverter
-        ├──► growatt   (legacy topic)
-        └──► homeassistant/sensor/...   (HA discovery)
+        ▼
+  growatt_modbus.py  (one process, MODBUS_LOCK serialises every session)
+        ├──► MQTT: growatt/<serial>/state, homeassistant/sensor/... (HA discovery)
+        └──► HTTP :8085  GET /health · GET /slots · POST /mode   (HA rest_commands + Agile scheduler)
 ```
 
 ## Why
@@ -154,23 +155,23 @@ populated and correct units / device classes. No `configuration.yaml` editing re
 
 ## Controlling the inverter
 
-Besides reading, the repo ships a control endpoint (`cgi/switch_inverter_mode.py`) that *writes*
-to the battery inverter. It is served by a small hardened lighttpd image,
-`ghcr.io/8none1/growatt_modbus-control`, built from `Dockerfile.control` on the
-[`lighttpd-chainguard`](https://github.com/8none1/lighttpd-chainguard) base, and shares the same
-`growatt/` library and `config.yaml` as the poller (the `control:` section in the config picks
-which inverter to command).
+Besides reading, the process serves a control + health HTTP endpoint on port 8085
+(`growatt/http_api.py`), sharing the same `growatt/` library and `config.yaml` as the poll loop
+(the `control:` section picks which inverter to command). All control Modbus access runs under
+the same `MODBUS_LOCK` as the poll loop, so it can never collide with a poll on the dongle.
 
-- **GET** `?action=get_all_slots` returns the current Battery-First / Grid-First time slots as JSON.
-- **POST** `{"action": ...}` switches mode or edits the AC-charge slots:
+- **GET** `/health` returns `200 {"status":"ok",...}` if the control inverter was read
+  successfully within `health.stale_after_seconds` (default 600), else `503 {"status":"stale"}`.
+  In-memory only - it never touches the inverter, so it is cheap to poll (e.g. as a Docker healthcheck).
+- **GET** `/slots` returns the current Battery-First / Grid-First time slots as JSON.
+- **POST** `/mode` `{"action": ...}` switches mode or edits the AC-charge slots:
   - `switch_inverter_to_batt_first_mode` (`duration`, `slot_num`) - charge from the grid for a window
   - `switch_inverter_to_grid_first_mode` (`duration`) - force-discharge to the grid
   - `switch_inverter_to_load_first_mode` - return to normal (self-use)
   - `disable_batt_first_slot` (`slot_num`), `clear_all_slots`
 
-Home Assistant drives these via `rest_command`s, and an Octopus Agile scheduler POSTs to it to
-charge the battery during cheap half-hours. The deploy compose is in
-[`deploy/control/`](deploy/control/). The AC-charge tuning values (charge rate, stop-SOC) are
+Home Assistant drives these via `rest_command`s, and an Octopus Agile scheduler charges the
+battery during cheap half-hours. The AC-charge tuning values (charge rate, stop-SOC) are
 intentionally hard-coded in `growatt/control.py`; only the inverter host comes from config.
 
 ## Register notes
