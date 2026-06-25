@@ -47,6 +47,10 @@ DEFAULT_CONFIG = {
     "control": {
         "device": None,
         "device_id": 1,
+        # Rated inverter power (W), used only to convert an export_watts request on
+        # the grid-first endpoint into the register-1070 discharge-rate percent.
+        # Leave null to require rate_percent instead.
+        "rated_power_w": None,
     },
 }
 

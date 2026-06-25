@@ -130,7 +130,25 @@ and solar is insufficient):
 > start register is **1018**. (Reading from 1017 makes a slot's end-time look like its enable, which
 > is misleading.) Slots 1-3 (the 1100 block) match the PDF.
 
-**Grid First (forced discharge to grid) slot 1**: 1080 / 1081 / 1082.
+**Grid First (forced discharge to grid) slots** mirror the batt-first split: a primary
+block (slots 1-3) plus an extended block (slots 4-6) sharing the 1017-1035 table.
+
+| Slot | start / end / enable registers | source |
+| ---- | ------------------------------ | ------ |
+| 1 | 1080 / 1081 / 1082 | verified |
+| 2 | 1083 / 1084 / 1085 | PDF (consecutive) |
+| 3 | 1086 / 1087 / 1088 | PDF (consecutive) |
+| 4 | 1027 / 1028 / 1029 | PDF + the +1 off-by-one |
+| 5 | 1030 / 1031 / 1032 | PDF + the +1 off-by-one |
+| 6 | 1033 / 1034 / 1035 | PDF + the +1 off-by-one |
+
+> Slots 4-6 sit in the **same extended-slot table as batt-first 4-6** and carry the same
+> **+1 off-by-one** the PDF has for that table. The PDF lists "Grid First Start Time 4" at
+> 1026, but real 1026 is the proven batt-first slot-6 enable, so grid-first slot 4 starts at
+> **1027** (real = PDF + 1), landing a clean gapless block 1018-1035. Slots 4-6 are
+> **PDF-derived and not yet live-verified** - read them back with `GET /slots` on the real
+> inverter before relying on them. The discharge rate (`1070`) and stop-discharge SOC
+> (`1071`) are global to grid-first mode, not per-slot.
 
 **AC-charge controls:**
 - `1044` priorityMode (0 = Load First, 1 = Battery First, 2 = Grid First)
