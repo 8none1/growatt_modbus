@@ -46,12 +46,42 @@ BATT_FIRST_SLOTS = [
     [1021, 1022, 1023],
     [1024, 1025, 1026],
 ]
-GRID_FIRST_SLOT_1 = [1080, 1081, 1082]
+# Grid First (forced discharge to grid) slots: [start, end, enable] registers per slot.
+# Mirrors the batt-first layout: a primary block (slots 1-3) plus an extended block
+# (slots 4-6) sharing the 1017-1035 table.
+#   Slots 1-3 (1080-1088): three consecutive regs each, verified for slot 1 / from PDF
+#     for 2-3.
+#   Slots 4-6 (1027-1035): derived from the PDF's extended-slot table via the SAME +1
+#     off-by-one proven for batt-first 4-6 (real 1026 is the batt-first slot-6 enable,
+#     so the next entry "GF start 4" is real 1027). NOT yet live-verified - confirm with
+#     GET /slots on the real inverter before relying on them.
+GRID_FIRST_SLOTS = [
+    [1080, 1081, 1082],   # slot 1 (verified)
+    [1083, 1084, 1085],   # slot 2
+    [1086, 1087, 1088],   # slot 3
+    [1027, 1028, 1029],   # slot 4 (PDF-derived, unverified)
+    [1030, 1031, 1032],   # slot 5 (PDF-derived, unverified)
+    [1033, 1034, 1035],   # slot 6 (PDF-derived, unverified)
+]
 
 
 def decode_time(encoded_time):
     """Decode the inverter time format (hour << 8 | minute) to 'HH:MM'."""
     return "%02d:%02d" % (encoded_time >> 8, encoded_time & 255)
+
+
+def encode_time(value):
+    """Encode 'HH:MM' (UTC) to the inverter time format (hour << 8 | minute).
+
+    Already-encoded integers are passed through, so callers can hand over either.
+    """
+    if isinstance(value, int):
+        return value
+    hh, mm = str(value).split(":")
+    hh, mm = int(hh), int(mm)
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        raise ValueError("time out of range: %r" % (value,))
+    return hh << 8 | mm
 
 
 class InverterControl:
@@ -97,13 +127,22 @@ class InverterControl:
                     "end": decode_time(bf_4_6[i * 3 + 1]),
                     "enabled": bool(bf_4_6[i * 3 + 2]),
                 }
-        gf = self._read(1080, 3)
-        if gf:
-            slots["grid_first_slot_1"] = {
-                "start": decode_time(gf[0]),
-                "end": decode_time(gf[1]),
-                "enabled": bool(gf[2]),
-            }
+        gf_1_3 = self._read(1080, 9)
+        if gf_1_3:
+            for i in range(3):
+                slots["grid_first_slot_%d" % (i + 1)] = {
+                    "start": decode_time(gf_1_3[i * 3]),
+                    "end": decode_time(gf_1_3[i * 3 + 1]),
+                    "enabled": bool(gf_1_3[i * 3 + 2]),
+                }
+        gf_4_6 = self._read(1027, 9)  # extended block, PDF-derived (see GRID_FIRST_SLOTS)
+        if gf_4_6:
+            for i in range(3):
+                slots["grid_first_slot_%d" % (i + 4)] = {
+                    "start": decode_time(gf_4_6[i * 3]),
+                    "end": decode_time(gf_4_6[i * 3 + 1]),
+                    "enabled": bool(gf_4_6[i * 3 + 2]),
+                }
         return slots
 
     # -- mode switches --
@@ -147,34 +186,88 @@ class InverterControl:
         self._write(slot_start_reg, [encoded_start, encoded_end, 1])
 
     def load_first(self):
-        """Load First: clear the Battery-First slot 6 enable and the Grid-First enable."""
+        """Load First: clear the Battery-First slot 6 enable and all Grid-First enables."""
         slot_6_enable_reg = BATT_FIRST_SLOTS[5][2]  # 1026
-        grid_first_enable_reg = GRID_FIRST_SLOT_1[2]  # 1082
         r = self._read(slot_6_enable_reg, 1)
         if r and r[0] == 1:
             log.info("Clearing batt first slot 6 enable")
             self._write(slot_6_enable_reg, [0])
-        r = self._read(grid_first_enable_reg, 1)
-        if r and r[0] == 1:
-            log.info("Clearing grid first slot 1 enable")
-            self._write(grid_first_enable_reg, [0])
+        for i, slot in enumerate(GRID_FIRST_SLOTS, 1):
+            r = self._read(slot[2], 1)
+            if r and r[0] == 1:
+                log.info("Clearing grid first slot %d enable", i)
+                self._write(slot[2], [0])
 
-    def grid_first(self, duration=30):
-        """Grid First (forced discharge): program grid-first slot 1 for now..now+duration."""
-        if duration is None:
-            duration = 30
-        duration = int(duration)
-        system_now = datetime.datetime.now(UTC)
-        end_time = system_now + datetime.timedelta(minutes=duration + 1)
-        log.info("[GF] now=%s duration=%s end=%s", system_now, duration, end_time)
-        # Clear batt-first slot 6 enable, set discharge rate + stop SOC (hard-coded), program slot 1.
+    def grid_first(self, duration=30, start=None, end=None, slot_num=1,
+                   export_watts=None, rate_percent=None, stop_soc=None, rated_power_w=None):
+        """Grid First (forced discharge to grid): program a grid-first slot to export.
+
+        Time window: pass absolute start/end as 'HH:MM' (UTC) for a fixed window
+        (e.g. a saving-session hour), or omit both to fall back to now..now+duration.
+        slot_num (1-3) selects which of the three grid-first slots to program.
+
+        The export rate and battery floor are controllable; the defaults preserve
+        the original behaviour (full-power discharge, stop at 25% SOC):
+
+        - rate (register 1070): the % of rated inverter power the battery discharges
+          at. Set it by wattage with export_watts (needs rated_power_w to convert),
+          or pass rate_percent to set the % directly. NB this caps battery *discharge*
+          power, so net grid export is roughly discharge - house load + PV, not an
+          exact export meter.
+        - stop_soc (register 1071): battery SOC floor; discharge stops here, so a
+          saving-session export does not drain the whole pack.
+
+        1070/1071 are global to grid-first mode (not per-slot), so they apply to
+        whichever slot is active.
+
+        Returns the resolved {slot_num, start, end, rate_percent, stop_soc}.
+        """
+        slot_num = int(slot_num)
+        if not (1 <= slot_num <= len(GRID_FIRST_SLOTS)):
+            raise ValueError("invalid grid-first slot number %s (1-%d)"
+                             % (slot_num, len(GRID_FIRST_SLOTS)))
+
+        # Resolve the discharge/export rate as a percent of rated power.
+        if export_watts is not None:
+            if not rated_power_w:
+                raise ValueError(
+                    "export_watts needs rated_power_w to convert to a percent "
+                    "(set control.rated_power_w in config)"
+                )
+            rate = round(100 * float(export_watts) / float(rated_power_w))
+        elif rate_percent is not None:
+            rate = int(rate_percent)
+        else:
+            rate = 100  # original default: discharge at full power
+        rate = max(1, min(100, rate))
+
+        floor = 25 if stop_soc is None else int(stop_soc)
+        floor = max(0, min(100, floor))
+
+        # Resolve the time window: absolute start/end, else now..now+duration.
+        if start is not None or end is not None:
+            if start is None or end is None:
+                raise ValueError("start and end must be given together")
+            encoded_start = encode_time(start)
+            encoded_end = encode_time(end)
+        else:
+            if duration is None:
+                duration = 30
+            system_now = datetime.datetime.now(UTC)
+            end_time = system_now + datetime.timedelta(minutes=int(duration) + 1)
+            encoded_start = system_now.hour << 8 | system_now.minute
+            encoded_end = end_time.hour << 8 | end_time.minute
+
+        slot = GRID_FIRST_SLOTS[slot_num - 1]
+        log.info("[GF] slot=%s start=%s end=%s rate=%s%% stop_soc=%s%%",
+                 slot_num, decode_time(encoded_start), decode_time(encoded_end), rate, floor)
+        # Clear batt-first slot 6 enable, set discharge rate + stop SOC, program the slot.
         self._write(BATT_FIRST_SLOTS[5][2], [0])  # 1026
-        self._write(1071, [25])
-        self._write(1070, [100])
-        encoded_start = system_now.hour << 8 | system_now.minute
-        encoded_end = end_time.hour << 8 | end_time.minute
-        log.info("[GF] writing grid-first slot 1 start=%s end=%s", encoded_start, encoded_end)
-        self._write(GRID_FIRST_SLOT_1[0], [encoded_start, encoded_end, 1])
+        self._write(1071, [floor])
+        self._write(1070, [rate])
+        self._write(slot[0], [encoded_start, encoded_end, 1])
+        return {"slot_num": slot_num, "start": decode_time(encoded_start),
+                "end": decode_time(encoded_end), "rate_percent": rate, "stop_soc": floor}
 
     def disable_batt_first_slot(self, slot_num):
         slot_num = int(slot_num)
@@ -189,10 +282,25 @@ class InverterControl:
         log.info("Disabling slot %d (register %d = 0)", slot_num, enable_reg)
         self._write(enable_reg, [0])
 
+    def disable_grid_first_slot(self, slot_num):
+        slot_num = int(slot_num)
+        if not (1 <= slot_num <= len(GRID_FIRST_SLOTS)):
+            log.warning("disable grid-first: invalid slot number %s", slot_num)
+            return
+        enable_reg = GRID_FIRST_SLOTS[slot_num - 1][2]
+        r = self._read(enable_reg, 1)
+        if r and r[0] == 0:
+            log.info("Grid-first slot %d already disabled", slot_num)
+            return
+        log.info("Disabling grid-first slot %d (register %d = 0)", slot_num, enable_reg)
+        self._write(enable_reg, [0])
+
     def clear_all_slots(self):
         log.info("Clearing all battery first slots (1100-1108)")
         self._write(1100, [0] * 9)
         log.info("Clearing all battery first slots (1018-1026)")
         self._write(1018, [0] * 9)
-        log.info("Clearing grid first slot (1080-1082)")
-        self._write(1080, [0] * 3)
+        log.info("Clearing grid first slots 1-3 (1080-1088)")
+        self._write(1080, [0] * 9)
+        log.info("Clearing grid first slots 4-6 (1027-1035)")
+        self._write(1027, [0] * 9)

@@ -32,11 +32,12 @@ _WRITE_ACTIONS = {
     "switch_inverter_to_grid_first_mode",
     "switch_inverter_to_load_first_mode",
     "disable_batt_first_slot",
+    "disable_grid_first_slot",
     "clear_all_slots",
 }
 
 
-def _apply_mode(inv, body):
+def _apply_mode(inv, body, config=None):
     """Run a control write on an open InverterControl. Returns the response dict."""
     inv.set_time()  # keep the clock aligned to UTC before scheduling
     action = body.get("action")
@@ -46,14 +47,32 @@ def _apply_mode(inv, body):
         inv.battery_first(duration, slot_num)
         return {"status": "success", "duration": duration}
     if action == "switch_inverter_to_grid_first_mode":
-        duration = body.get("duration")
-        inv.grid_first(duration)
-        return {"status": "success", "duration": duration}
+        # Time window: start/end as 'HH:MM' (UTC) for a fixed window, else duration
+        #   (now..now+duration). slot_num (1-6) picks which grid-first slot to program.
+        # Optional export controls (default to full power / 25% floor when omitted):
+        #   export_watts  -> rate as a % of rated power (needs control.rated_power_w)
+        #   rate_percent  -> set the discharge-rate % directly
+        #   stop_soc      -> battery SOC floor so a saving session does not fully drain
+        rated = (config or {}).get("control", {}).get("rated_power_w")
+        resolved = inv.grid_first(
+            body.get("duration"),
+            start=body.get("start"),
+            end=body.get("end"),
+            slot_num=body.get("slot_num", 1),
+            export_watts=body.get("export_watts"),
+            rate_percent=body.get("rate_percent"),
+            stop_soc=body.get("stop_soc"),
+            rated_power_w=rated,
+        )
+        return {"status": "success", **resolved}
     if action == "switch_inverter_to_load_first_mode":
         inv.load_first()
         return {"status": "success"}
     if action == "disable_batt_first_slot":
         inv.disable_batt_first_slot(body.get("slot_num"))
+        return {"status": "success"}
+    if action == "disable_grid_first_slot":
+        inv.disable_grid_first_slot(body.get("slot_num"))
         return {"status": "success"}
     if action == "clear_all_slots":
         inv.clear_all_slots()
@@ -124,7 +143,7 @@ class _Handler(BaseHTTPRequestHandler):
                                     "message": "unknown action: %s" % action})
         try:
             result = with_control_session(self.server.gw_config,
-                                          lambda inv: _apply_mode(inv, body))
+                                          lambda inv: _apply_mode(inv, body, self.server.gw_config))
             return self._send(200, result)
         except Exception as e:
             log.warning("POST /mode (%s) failed: %s", action, e)

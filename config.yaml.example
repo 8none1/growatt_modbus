@@ -62,3 +62,8 @@ health:
 control:
   device: inverter1          # name from the devices list above (defaults to the first)
   device_id: 1               # Modbus unit id
+  # Rated inverter power (W). Only used to turn an `export_watts` request on the
+  # grid-first endpoint into a discharge-rate percent (register 1070). Leave unset
+  # to require callers to pass `rate_percent` directly. Set to your SPH's rating,
+  # e.g. 3600 for an SPH 3600.
+  # rated_power_w: 3600
