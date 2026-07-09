@@ -47,11 +47,25 @@ def _handle_signal(signum, _frame):
 # ---------------------------------------------------------------------------
 # MQTT
 # ---------------------------------------------------------------------------
-def make_mqtt_client(mqtt_cfg):
-    """Create and connect a persistent MQTT client."""
+def make_mqtt_client(mqtt_cfg, on_reconnect=None):
+    """Create and connect a persistent MQTT client.
+
+    ``on_reconnect`` (if given) is invoked on every successful (re)connect. We use it to
+    re-publish HA discovery: the retained discovery configs can be lost if the broker
+    restarts without them in its persistence file (or they are otherwise cleared), which
+    silently drops every Growatt entity in HA until we announce again. paho auto-reconnects
+    under ``loop_start``, so re-announcing on each connect makes the pipeline self-heal.
+    """
     client = mqtt.Client(client_id="growatt", callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
     if mqtt_cfg.get("username"):
         client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password"))
+    if on_reconnect is not None:
+        def _on_connect(_client, _userdata, _flags, reason_code, _properties):
+            if reason_code.is_failure:
+                log.warning("MQTT connect failed: %s", reason_code)
+            else:
+                on_reconnect()
+        client.on_connect = _on_connect
     client.connect(mqtt_cfg["broker"], mqtt_cfg["port"])
     client.loop_start()
     return client
@@ -247,9 +261,19 @@ def main():
     signal.signal(signal.SIGINT, _handle_signal)
 
     config = load_config()
-    mqtt_client = make_mqtt_client(config["mqtt"])
-    discovered = set()
+    discovered = set()  # serials whose HA discovery has been published on this connection
     stats = {}  # per-host read-health counters, surfaced as HA diagnostic sensors
+
+    def _on_mqtt_reconnect():
+        # Force the poll loop to re-publish HA discovery after any (re)connect. Clearing the
+        # set is enough: the next successful poll re-announces each serial. Kept lazy (not an
+        # immediate publish here) so we only announce serials we can actually read, and so
+        # this stays off the paho network thread.
+        if discovered:
+            log.info("MQTT (re)connected; will re-publish HA discovery on next poll")
+        discovered.clear()
+
+    mqtt_client = make_mqtt_client(config["mqtt"], on_reconnect=_on_mqtt_reconnect)
 
     # Control + health HTTP endpoint (formerly a separate lighttpd/CGI container). Runs in
     # a daemon thread; it shares `stats` (for /health) and the global Modbus lock with the
