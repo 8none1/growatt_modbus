@@ -12,33 +12,59 @@ than publishing partial data.
 from .client import read_double_reg, read_holding_registers, read_input_registers
 
 
-def read_inverter_holding_registers(client):
+def read_inverter_holding_registers(client, cache=None):
+    """Read and decode the holding registers, using `cache` to skip static ones.
+
+    cache is a per-device dict the caller persists across cycles (like the cached
+    serial). Chunk 0-15 (rated values, firmware versions, settings that never change
+    in practice) is read once and reused, and the 122-185 chunk shrinks to just the
+    export-limit pair once its static fields (svgFunctionEnabled, numBatteryModules)
+    are cached. On the RTU dongles a transaction costs far more than its register
+    count, and shorter frames garble less, so this trims both time and retries.
+    Pass cache=None to read everything fresh (a restart re-reads anyway).
+    """
+    cache = {} if cache is None else cache
     holding_registers = {}
-    registers = read_holding_registers(client, 0, 16)
-    if not registers:
-        return None
-    holding_registers['safetyFunctionsBitMap']      = registers[1]
-    holding_registers['maxOutputActivePower']        = registers[3]
-    holding_registers['maxOutputReactivePower']      = registers[4]
-    holding_registers['inverterPowerFactor']         = registers[5]
-    normal_power                                     = read_double_reg(registers[6], registers[7], 0.1)
-    holding_registers['NormalPower']                 = round(normal_power, 2)
-    holding_registers['inverterNormalVoltage']       = registers[8]
-    holding_registers['firmwareVersionH']            = registers[9]
-    holding_registers['firmwareVersionM']            = registers[10]
-    holding_registers['firmwareVersionL']            = registers[11]
-    holding_registers['controllerVersionH']          = registers[12]
-    holding_registers['controllerVersionM']          = registers[13]
-    holding_registers['controllerVersionL']          = registers[14]
-    holding_registers['lcdLanguage']                 = registers[15]
+    static = cache.get('holdingStatic0')
+    if static is None:
+        registers = read_holding_registers(client, 0, 16)
+        if not registers:
+            return None
+        static = {}
+        static['safetyFunctionsBitMap']              = registers[1]
+        static['maxOutputActivePower']               = registers[3]
+        static['maxOutputReactivePower']             = registers[4]
+        static['inverterPowerFactor']                = registers[5]
+        normal_power                                 = read_double_reg(registers[6], registers[7], 0.1)
+        static['NormalPower']                        = round(normal_power, 2)
+        static['inverterNormalVoltage']              = registers[8]
+        static['firmwareVersionH']                   = registers[9]
+        static['firmwareVersionM']                   = registers[10]
+        static['firmwareVersionL']                   = registers[11]
+        static['controllerVersionH']                 = registers[12]
+        static['controllerVersionM']                 = registers[13]
+        static['controllerVersionL']                 = registers[14]
+        static['lcdLanguage']                        = registers[15]
+        cache['holdingStatic0'] = static
+    holding_registers.update(static)
+    # 122/123 (export limit) are user-changeable so stay per-cycle; 141/185 are static.
+    static = cache.get('holdingStatic122')
     next_chunk_start = 122
-    registers = read_holding_registers(client, next_chunk_start, 64)
-    if not registers:
-        return None
+    if static is None:
+        registers = read_holding_registers(client, next_chunk_start, 64)
+        if not registers:
+            return None
+        static = {}
+        static['svgFunctionEnabled']                 = registers[141 - next_chunk_start]
+        static['numBatteryModules']                  = registers[185 - next_chunk_start]
+        cache['holdingStatic122'] = static
+    else:
+        registers = read_holding_registers(client, next_chunk_start, 2)
+        if not registers:
+            return None
     holding_registers['exportLimitState']            = registers[122 - next_chunk_start]
     holding_registers['exportLimitRate']             = registers[123 - next_chunk_start]
-    holding_registers['svgFunctionEnabled']          = registers[141 - next_chunk_start]
-    holding_registers['numBatteryModules']           = registers[185 - next_chunk_start]
+    holding_registers.update(static)
     registers = read_holding_registers(client, 1000, 93)
     if not registers:
         return None
