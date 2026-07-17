@@ -177,26 +177,37 @@ class InverterControl:
             log.info("[BF] existing slot ends before requested, reprogramming")
 
         # Max charge level + enable AC charging (values intentionally hard-coded).
-        self._write(1090, [100])
-        self._write(1091, [100])
-        self._write(1092, [1])
+        # 1090-1092 are consecutive (charge rate, stop SOC, AC-charge enable), so one
+        # FC16 write covers all three; each extra transaction on the RTU dongle costs
+        # far more than the extra registers do.
+        self._write(1090, [100, 100, 1])
         encoded_start = system_now.hour << 8 | system_now.minute
         encoded_end = new_end_time.hour << 8 | new_end_time.minute
         log.info("[BF] writing slot %s start=%s end=%s", slot_num, encoded_start, encoded_end)
         self._write(slot_start_reg, [encoded_start, encoded_end, 1])
 
     def load_first(self):
-        """Load First: clear the Battery-First slot 6 enable and all Grid-First enables."""
+        """Load First: clear the Battery-First slot 6 enable and all Grid-First enables.
+
+        The enables are checked with two block reads instead of one read per register:
+        1026-1035 spans the batt-first slot 6 enable plus grid-first slots 4-6, and
+        1080-1088 covers grid-first slots 1-3. Only enables that are set get a write.
+        """
         slot_6_enable_reg = BATT_FIRST_SLOTS[5][2]  # 1026
-        r = self._read(slot_6_enable_reg, 1)
-        if r and r[0] == 1:
+        block_1026 = self._read(1026, 10)  # 1026 + grid-first slots 4-6 (1027-1035)
+        block_1080 = self._read(1080, 9)   # grid-first slots 1-3
+        if block_1026 and block_1026[0] == 1:
             log.info("Clearing batt first slot 6 enable")
             self._write(slot_6_enable_reg, [0])
         for i, slot in enumerate(GRID_FIRST_SLOTS, 1):
-            r = self._read(slot[2], 1)
-            if r and r[0] == 1:
+            enable_reg = slot[2]
+            if 1080 <= enable_reg <= 1088:
+                block, base = block_1080, 1080
+            else:
+                block, base = block_1026, 1026
+            if block and block[enable_reg - base] == 1:
                 log.info("Clearing grid first slot %d enable", i)
-                self._write(slot[2], [0])
+                self._write(enable_reg, [0])
 
     def grid_first(self, duration=30, start=None, end=None, slot_num=1,
                    export_watts=None, rate_percent=None, stop_soc=None, rated_power_w=None):
@@ -261,10 +272,10 @@ class InverterControl:
         slot = GRID_FIRST_SLOTS[slot_num - 1]
         log.info("[GF] slot=%s start=%s end=%s rate=%s%% stop_soc=%s%%",
                  slot_num, decode_time(encoded_start), decode_time(encoded_end), rate, floor)
-        # Clear batt-first slot 6 enable, set discharge rate + stop SOC, program the slot.
+        # Clear batt-first slot 6 enable, set discharge rate + stop SOC (1070-1071 are
+        # consecutive, one write), program the slot.
         self._write(BATT_FIRST_SLOTS[5][2], [0])  # 1026
-        self._write(1071, [floor])
-        self._write(1070, [rate])
+        self._write(1070, [rate, floor])
         self._write(slot[0], [encoded_start, encoded_end, 1])
         return {"slot_num": slot_num, "start": decode_time(encoded_start),
                 "end": decode_time(encoded_end), "rate_percent": rate, "stop_soc": floor}

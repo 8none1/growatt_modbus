@@ -165,6 +165,8 @@ def poll_device(dev, config, mqtt_client, discovered, stats):
         "lastCycleRetries": 0,
         # Wall/monotonic clock of the last fully-successful read; drives /health.
         "lastGoodReadMonotonic": None,
+        # Static holding registers, read once and reused (see read_inverter_holding_registers).
+        "holdingCache": {},
     })
     mqtt_cfg = config["mqtt"]
 
@@ -218,7 +220,7 @@ def poll_device(dev, config, mqtt_client, discovered, stats):
             attempts_used = 0
             for attempt in range(1, read_retries + 1):
                 attempts_used = attempt
-                holding_registers = read_inverter_holding_registers(client)
+                holding_registers = read_inverter_holding_registers(client, cache=st["holdingCache"])
                 input_registers = read_inverter_input_registers(client)
                 if holding_registers is not None and input_registers is not None:
                     break
