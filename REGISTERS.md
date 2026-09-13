@@ -280,3 +280,29 @@ starts pulling isolators.
 `control.set_export_limit()` therefore refuses any mode other than 0 unless you pass
 `force=True`, and the HTTP API does not expose `force`. Register `123` is safe to write
 on its own and is inert while `122` is 0.
+
+### Why it fails, from the PDF (checked 2026-09-13, and it explains everything)
+
+- **The PDF contradicts itself on `122`.** The description lists four values (0 disable,
+  1 enable 485, 2 enable 232, 3 enable CT) but the **Range column says `1/0`**. The
+  firmware enforces the Range column, which is exactly why 2 and 3 came back as illegal
+  data values. So on an SPH the only selectable limiter is **`1`, the RS485-meter one**.
+- **This install has no RS485 meter** (confirmed by Will; the only current sensing is a
+  CT clamp). So enabling mode 1 starts a feedback loop with no sensor.
+- **`3000 ExportLimitFailedPowerRate`, "the power rate when exportLimit failed", is
+  TL-X/TL-XH only.** On a TL-X you could set what the inverter falls back to when the
+  limiter loses its meter. The SPH has no such register, and the observed fallback is
+  **zero output**. That single missing register is the whole story.
+- **`533 LimitDevice`** ("Anti-backflow equipment selection", 1 Meter / 3 CT) would be
+  the way to point the limiter at a CT, but it is **outside the SPH register map** and
+  reads 0. Same for **`180 MeterLink`**: out of range, so its 0 is not a real "no meter"
+  reading, just an unimplemented register.
+- **The SPH holding-register map is only `0`-`124` and `1000`-`1124`** (PDF: "Storage
+  (SPH Type): 03 register range: 0~124, 1000~1124"). Worth remembering before chasing
+  any register outside those two windows.
+- `bCTMode` in the storage block reads **0 = wired CT**, consistent with the hardware,
+  so the inverter does know it has a CT. It just will not use it for export limiting.
+- **Nothing couples `122`/`123` to Grid First.** They sit in the general inverter block
+  (`0`-`124`), grid-first sits in `1000`-`1124`, and empirically `122 = 1` was *not*
+  inert while the inverter was in Load First: it zeroed output within 21 seconds. So
+  this is a firmware limitation, not a sequencing mistake.
