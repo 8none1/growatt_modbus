@@ -240,41 +240,47 @@ for this burst, about double the 96 Wh the power samples support (five consecuti
 samples at ~2800 W across 105 s). The power-derived figure is the trustworthy one; that
 HA sensor's provenance needs checking before anything relies on it.
 
-### CONFIRMED: grid-first slot 1 and "batt-first slot 6" share registers
+### SOLVED: register 1026 is NOT the batt-first slot 6 enable
 
-First seen as an oddity, then reproduced deliberately on 2026-09-13 with a controlled
-probe (no energy cost: a 03:07 window that could not fire, disabled immediately after).
+The code calls `1024`/`1025`/`1026` "battery-first slot 6", and `grid_first()` opens by
+writing `1026 = 0` with the comment "clear batt-first slot 6 enable". Both are wrong.
+Established 2026-09-13 with zero-cost probes (windows in the small hours, disabled
+immediately, nothing ever fired):
 
-    BEFORE:  grid_first_slot_1 = 18:43-18:44      battery_first_slot_6 = 00:00-00:00
-    write:   grid-first slot 1 := 03:07-03:09     (registers 1080/1081/1082)
-    AFTER:   grid_first_slot_1 = 03:07-03:09      battery_first_slot_6 = 18:43-18:44
+    gf1 := 03:07-03:09   ->  gf1 = 03:07   "bf6" = 03:07   (gf1 was already 03:07)
+    gf1 := 04:11-04:13   ->  gf1 = 04:11   "bf6" = 03:07
+    gf1 := 05:17-05:19   ->  gf1 = 05:17   "bf6" = 04:11
+    gf2 := 07:31-07:33   ->  gf2 = 07:31   "bf6" = 05:17   <- slot 1's CURRENT value
 
-So writing `1080`/`1081` pushes their **previous** value into `1024`/`1025`, the pair the
-code maps as batt-first slot 6 start/end. It is a shadow, one write behind, and it is
-reproducible.
+The slot-1 writes look like a one-behind shadow, but the slot-2 write gives it away.
+**One rule fits all four: something at the start of every `grid_first()` call copies
+`1080`/`1081` into `1024`/`1025`.** Writing slot 1 appears "one behind" only because the
+copy happens before the new window lands; writing slot 2 leaves slot 1 alone, so the
+copy looks like a plain mirror.
 
-**The likely explanation is that the map for this block is wrong, not that the firmware
-helpfully mirrors things.** Will's call, and it fits the pattern: the PDF's extended-slot
-table has already been "corrected" by +1 in this code
-(`# NB slots 4-6 start at 1018, not 1017 as the Growatt PDF says`), the PDF's own
-`122` row contradicts itself, and `533`/`180` turned out to be outside the SPH map
-entirely. A firmware mirror was a hand-wave; an off-by-something in a block the PDF
-describes badly is the ordinary explanation.
+The only thing `grid_first()` does before writing the window is `_write(1026, [0])`, so
+**`1026` is a grid-first commit/snapshot control, not a batt-first enable.** Not fully
+isolated: the call also writes `1070`/`1071` beforehand, so the trigger is one of those
+two, and `1026` is much the likelier given the block. Isolating it needs a way to write
+`1026` alone, which no endpoint offers.
 
-Note the block really is written by both functions: `1024`/`1025` read `06:30`/`07:01`
-before any grid-first write happened tonight, which is a morning charge window, so the
-batt-first automation does write there too.
+**Consequences:**
 
-**Untested: the reverse direction.** Whether writing batt-first slot 6 corrupts
-grid-first slot 1's window is unknown, and probing it is not free (it enables a
-grid-charge slot and also writes `1090`-`1092`), so it was left alone.
+- Do not trust `battery_first_slot_6` from `GET /slots`. It is showing a copy of the
+  grid-first slot 1 window, not a charge slot.
+- The batt-first path *does* also write there: `1024`/`1025` held a real `06:30`-`07:01`
+  morning window before any grid-first write happened. So programming a grid-first burst
+  **overwrites batt-first slot 6's times**. Benign today only because every batt-first
+  caller passes a duration and so rewrites its own times on the next run
+  (`rest_command.inverter_switch_to_batt_first_duration`), and because the export bursts
+  are torn down hours before the 06:30 window.
+- The comment on `_write(BATT_FIRST_SLOTS[5][2], [0])` in `control.py` is misleading and
+  should be corrected rather than trusted.
 
-**Practical exposure is nil today** but know the shape of it: the Power Down export
-bursts programme grid-first slots 1-3 minutes before a session and tear them down
-minutes after, while the batt-first slot 6 window is around 06:30, so they never coexist.
-Do not trust `/slots`' `battery_first_slot_6` reading, and treat `grid_first()`'s
-`_write(1026, [0])` as writing something in this murky block rather than as a reliable
-"clear the batt-first slot 6 enable".
+**Grid-first slot 2 is now verified for write and read-back**: `1083`-`1085` took
+`07:31`-`07:33` and read back correctly. That is the slot the export-burst automation
+uses for the second half hour. Whether it actually *fires* is still unproven; only slot 1
+has been seen to drive a real discharge.
 
 ### Known-safe registers for force discharge (use these only)
 
