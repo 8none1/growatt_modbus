@@ -34,6 +34,7 @@ _WRITE_ACTIONS = {
     "disable_batt_first_slot",
     "disable_grid_first_slot",
     "clear_all_slots",
+    "set_export_limit",
 }
 
 
@@ -74,6 +75,22 @@ def _apply_mode(inv, body, config=None):
     if action == "disable_grid_first_slot":
         inv.disable_grid_first_slot(body.get("slot_num"))
         return {"status": "success"}
+    if action == "set_export_limit":
+        # Ceiling on export to the grid from any source (registers 122/123). Pair a
+        # small limit here with grid_first(rate_percent=100) to hold a steady small
+        # export; 1070 alone cannot do that (see control.set_export_limit).
+        #   mode          -> 0 disable, 1 RS485 meter, 2 RS232, 3 CT clamp
+        #   rate_percent  -> the cap as a % of rated power (0.1 % resolution)
+        #   watts         -> the cap in watts (needs control.rated_power_w; the
+        #                    percentage base is unverified, prefer rate_percent)
+        rated = (config or {}).get("control", {}).get("rated_power_w")
+        resolved = inv.set_export_limit(
+            body.get("mode"),
+            rate_percent=body.get("rate_percent"),
+            watts=body.get("watts"),
+            rated_power_w=rated,
+        )
+        return {"status": "success", **resolved}
     if action == "clear_all_slots":
         inv.clear_all_slots()
         return {"status": "success"}
@@ -124,6 +141,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"status": "success", "slots": slots})
             except Exception as e:
                 log.warning("GET /slots failed: %s", e)
+                return self._send(500, {"status": "error", "message": str(e)})
+        if path == "/export_limit":
+            try:
+                limit = with_control_session(self.server.gw_config,
+                                             lambda inv: inv.get_export_limit())
+                return self._send(200, {"status": "success", "export_limit": limit})
+            except Exception as e:
+                log.warning("GET /export_limit failed: %s", e)
                 return self._send(500, {"status": "error", "message": str(e)})
         return self._send(404, {"status": "error", "message": "not found: %s" % path})
 

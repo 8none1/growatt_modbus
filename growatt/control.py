@@ -306,6 +306,64 @@ class InverterControl:
         log.info("Disabling grid-first slot %d (register %d = 0)", slot_num, enable_reg)
         self._write(enable_reg, [0])
 
+    # -- export limiting (holding 122/123) --
+    def get_export_limit(self):
+        """Read the export limiter: {mode, rate_raw, rate_percent}. None on a bad read."""
+        r = self._read(122, 2)
+        if not r:
+            return None
+        raw = r[1] - 65536 if r[1] > 32767 else r[1]  # 123 is signed
+        return {"mode": r[0], "rate_raw": raw, "rate_percent": raw / 10.0}
+
+    def set_export_limit(self, mode, rate_percent=None, watts=None, rated_power_w=None):
+        """Cap what reaches the grid from any source (registers 122/123).
+
+        This does NOT make the battery export; it is a ceiling on export that is
+        already happening. Its value is that the inverter regulates to it with its
+        own CT feedback loop, so it holds a small steady export against a rapidly
+        varying house load. Register 1070 cannot do that: it is a fixed discharge
+        rate, not an export setpoint (live-verified 2026-09-13, see REGISTERS.md),
+        so a low 1070 starves the house and pulls the shortfall off the grid.
+
+        The intended pairing is grid_first(rate_percent=100) for a generous
+        discharge, plus a small limit here to trim the surplus.
+
+        mode (register 122): 0 disable, 1 RS485 meter, 2 RS232, 3 CT clamp.
+        rate (register 123): signed tenths of a percent of rated power, so 15 %
+          is written as 150. Give the percent directly with rate_percent, or by
+          wattage with watts (needs rated_power_w).
+
+        CAUTION on the wattage conversion: register 123's percentage base is
+        NOT verified. Register 1070's base measured as ~4000 W, not the SPH-5000
+        nameplate, so 123 may well behave the same. Prefer rate_percent and
+        measure what you actually get before trusting watts.
+
+        Returns the resolved {mode, rate_percent, rate_raw}.
+        """
+        mode = int(mode)
+        if mode not in (0, 1, 2, 3):
+            raise ValueError("invalid export limit mode %s (0 disable, 1 RS485 "
+                             "meter, 2 RS232, 3 CT clamp)" % mode)
+
+        if watts is not None:
+            if rate_percent is not None:
+                raise ValueError("give either rate_percent or watts, not both")
+            if not rated_power_w:
+                raise ValueError("watts needs rated_power_w to convert to a percent "
+                                 "(set control.rated_power_w in config)")
+            rate_percent = 100.0 * float(watts) / float(rated_power_w)
+
+        if rate_percent is None:
+            rate_percent = 0.0 if mode == 0 else 100.0
+        raw = int(round(float(rate_percent) * 10))
+        raw = max(-1000, min(1000, raw))
+
+        log.info("[EL] mode=%s rate=%.1f%% (register 123 = %s)", mode, raw / 10.0, raw)
+        # 122/123 are consecutive, so one write covers both. 123 is signed, and a
+        # Modbus register is unsigned on the wire, so send two's complement.
+        self._write(122, [mode, raw & 0xFFFF])
+        return {"mode": mode, "rate_percent": raw / 10.0, "rate_raw": raw}
+
     def clear_all_slots(self):
         log.info("Clearing all battery first slots (1100-1108)")
         self._write(1100, [0] * 9)

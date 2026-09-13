@@ -167,3 +167,83 @@ for a cheap window), not a fault.
   into human-readable fault/warning sensors.
 - Confirming the 1112-1123 per-cell-voltage hypothesis.
 - The holding 124-1000 gap (covers `svgFunctionEnabled`, `numBatteryModules`).
+
+## Grid-first force discharge: LIVE-VERIFIED 2026-09-13 (WCK0CDE013)
+
+First real force-discharge test on the hardware. This **settles the register 1070
+question** that `POWER_DOWN_EXPORT_PLAN.md` lists as its blocking unknown, and it
+found two things the PDF does not mention.
+
+**Method.** Grid-first slot 1 (`1080`/`1081`/`1082`) programmed for a 2-minute UTC
+window, `1070 = 40`, `1071 = 25` (SOC was 92-93 %, so the floor was never near).
+Evening, PV ~350 W, house ~2130 W, so the battery was carrying the house with zero
+import and zero export beforehand. MQTT sampled every ~8-30 s throughout.
+
+### 1070 is a DISCHARGE CAP, not an export setpoint
+
+Reading (A) confirmed. During the window battery discharge **pinned flat at 1600 W**
+for the whole slot, and because 1600 W of battery + 350 W of PV was less than the
+~2130 W the house wanted, the house **began importing 60-120 W having imported
+nothing beforehand**. Two samples caught 1120-1130 W of *export* when the house load
+momentarily dropped away, which is the clincher: the battery holds the commanded rate
+regardless of load, and grid flow is simply the remainder.
+
+    export = discharge(1070) + PV - house load        (signed; negative = import)
+
+**Consequence: a low rate does NOT give you a small export, it gives you import.**
+Any "frugal" small-export scheme built on 1070 alone is wrong. To get a small
+controlled export, run 1070 generously (battery comfortably ahead of the house) and
+cap the surplus with the export limiter at `122`/`123` instead.
+
+### The percentage base is ~4000 W, NOT the 5000 W nameplate
+
+`1070 = 40` produced exactly 1600 W, i.e. 40 % of **4000 W**. 4000 W is also the
+maximum discharge observed over 14 days of recorder history (p95 3580 W). So do not
+size a rate against the SPH-5000 nameplate: 1 % is ~40 W, not 50 W, and
+`control.rated_power_w = 5000` would make `export_watts` conversions ~20 % optimistic.
+
+### Grid-first mode LINGERS past the slot end time
+
+Window ended 16:37; the inverter was still in `priorityMode = 2` at **16:38:24** and
+only dropped to Load First after an explicit `disable_grid_first_slot`. **Never rely
+on the window expiring** - always write the enable register to 0 to end a burst.
+
+### ANOMALY: writing slot 1 leaves the window visible at 1024/1025
+
+After programming `1080`/`1081` = 16:35/16:37, the pair the code reads back as
+**battery-first slot 6 start/end (`1024`/`1025`) also read 16:35/16:37**, where it had
+been 06:30/07:01. It is **not a simple alias**: a later write of 00:00/00:00 to
+`1080`/`1081` left `1024`/`1025` still showing 16:35/16:37. Mechanism unknown - either
+the `1018`-`1035` map is wrong or the firmware mirrors the force-discharge window
+there. Harmless in this instance (slot disabled, and every batt-first caller passes a
+duration so the times get rewritten), but:
+
+**Treat the `1018`-`1035` extended block as UNSAFE.** That covers batt-first slots
+4-6 and grid-first slots 4-6 as currently mapped. Use only the registers below.
+
+### Known-safe registers for force discharge (use these only)
+
+| Register | Purpose | Status |
+|---|---|---|
+| `1080`/`1081`/`1082` | grid-first slot 1 start/end/enable | live-verified, this test |
+| `1083`-`1085`, `1086`-`1088` | grid-first slots 2/3 | PDF-derived, adjacent to the verified block, read back after writing |
+| `1070` | discharge rate %, base ~4000 W | live-verified as a cap |
+| `1071` | stop-discharge SOC % | written and read back OK |
+| `1044` | priorityMode, read-only in practice | observed going 0 -> 2 -> 0 |
+| `1027`-`1035` | grid-first slots 4-6 | **DO NOT USE** - see anomaly above |
+
+### Measuring how much actually went out
+
+`eToGridToday` **sat unchanged at 2.5 kWh** through more than a kilowatt of export,
+because it only resolves to 0.1 kWh. It is useless as a burst-level stop condition.
+Use the instantaneous `gridExportPowerTotal` (W), which tracked live and responsively,
+and integrate it (a Riemann sum sensor in HA) to get watt-hour resolution.
+
+### Still untested
+
+`122`/`123` (export limiting) have **never been written** on this install; both read 0
+live. There is no write path for them in `control.py`. The intended design is
+`122 = 3` (CT clamp, confirmed fitted), `123` = the cap in signed tenths of a percent
+of rated power, with `1070` left at 100, so the inverter's own CT feedback loop holds
+a small export against a rapidly varying house load. Untested pending that write
+support.
