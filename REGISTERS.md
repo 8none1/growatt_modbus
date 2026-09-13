@@ -202,11 +202,43 @@ maximum discharge observed over 14 days of recorder history (p95 3580 W). So do 
 size a rate against the SPH-5000 nameplate: 1 % is ~40 W, not 50 W, and
 `control.rated_power_w = 5000` would make `export_watts` conversions ~20 % optimistic.
 
-### Grid-first mode LINGERS past the slot end time
+### Grid-first mode LINGERS past the slot end time, by a consistent ~80 seconds
 
 Window ended 16:37; the inverter was still in `priorityMode = 2` at **16:38:24** and
 only dropped to Load First after an explicit `disable_grid_first_slot`. **Never rely
 on the window expiring** - always write the enable register to 0 to end a burst.
+
+**Quantified 2026-09-13** by programming a one-minute window (18:43 -> 18:44, explicit
+start/end so no `+1` minute is added) and polling holding `1044` every 4 s:
+
+| Event | Time | Offset |
+|---|---|---|
+| window opens | 18:43:00 | |
+| `priorityMode` 0 -> 2, export ramps to 2800 W | 18:43:15 | **+15 s** |
+| window closes | 18:44:00 | |
+| `priorityMode` 2 -> 0, export stops | 18:45:18 | **+78 s** |
+
+So a **one-minute slot produces a ~123 second burst**, roughly double. The ~80 s
+overrun matches the 16:37 observation, so the inverter appears to re-evaluate its slot
+boundaries on an 80-90 s cycle rather than continuously. Practical consequences:
+
+- One minute is the shortest *programmable* window (slots are `HH:MM`), and it costs
+  about **96 Wh** of export at a summer-evening load (2800 W for 123 s). Writing the
+  enable bit to 0 directly would end it ~80 s sooner and roughly halve that, if the
+  extra energy ever matters.
+- **Place a burst in the middle of the half hour it is meant to count for**, e.g.
+  minute 10 and minute 40. A window in the last two minutes of a half hour will bleed
+  into the next one.
+- Entry is prompt enough (+15 s) that a burst will not be missed entirely.
+
+Polling `/registers` every 4 s alongside the 20 s poll loop caused **no** inverter read
+errors (`readErrorsTotal` and `pollSkippedTotal` both stayed 0); the few failures in the
+trace were the client's own 4 s curl timeout waiting on `MODBUS_LOCK`.
+
+**Caveat on measuring the energy:** `sensor.grid_export_power_kwh` in HA moved 200 Wh
+for this burst, about double the 96 Wh the power samples support (five consecutive
+samples at ~2800 W across 105 s). The power-derived figure is the trustworthy one; that
+HA sensor's provenance needs checking before anything relies on it.
 
 ### ANOMALY: writing slot 1 leaves the window visible at 1024/1025
 
