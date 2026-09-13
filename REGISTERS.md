@@ -240,18 +240,41 @@ for this burst, about double the 96 Wh the power samples support (five consecuti
 samples at ~2800 W across 105 s). The power-derived figure is the trustworthy one; that
 HA sensor's provenance needs checking before anything relies on it.
 
-### ANOMALY: writing slot 1 leaves the window visible at 1024/1025
+### CONFIRMED: grid-first slot 1 and "batt-first slot 6" share registers
 
-After programming `1080`/`1081` = 16:35/16:37, the pair the code reads back as
-**battery-first slot 6 start/end (`1024`/`1025`) also read 16:35/16:37**, where it had
-been 06:30/07:01. It is **not a simple alias**: a later write of 00:00/00:00 to
-`1080`/`1081` left `1024`/`1025` still showing 16:35/16:37. Mechanism unknown - either
-the `1018`-`1035` map is wrong or the firmware mirrors the force-discharge window
-there. Harmless in this instance (slot disabled, and every batt-first caller passes a
-duration so the times get rewritten), but:
+First seen as an oddity, then reproduced deliberately on 2026-09-13 with a controlled
+probe (no energy cost: a 03:07 window that could not fire, disabled immediately after).
 
-**Treat the `1018`-`1035` extended block as UNSAFE.** That covers batt-first slots
-4-6 and grid-first slots 4-6 as currently mapped. Use only the registers below.
+    BEFORE:  grid_first_slot_1 = 18:43-18:44      battery_first_slot_6 = 00:00-00:00
+    write:   grid-first slot 1 := 03:07-03:09     (registers 1080/1081/1082)
+    AFTER:   grid_first_slot_1 = 03:07-03:09      battery_first_slot_6 = 18:43-18:44
+
+So writing `1080`/`1081` pushes their **previous** value into `1024`/`1025`, the pair the
+code maps as batt-first slot 6 start/end. It is a shadow, one write behind, and it is
+reproducible.
+
+**The likely explanation is that the map for this block is wrong, not that the firmware
+helpfully mirrors things.** Will's call, and it fits the pattern: the PDF's extended-slot
+table has already been "corrected" by +1 in this code
+(`# NB slots 4-6 start at 1018, not 1017 as the Growatt PDF says`), the PDF's own
+`122` row contradicts itself, and `533`/`180` turned out to be outside the SPH map
+entirely. A firmware mirror was a hand-wave; an off-by-something in a block the PDF
+describes badly is the ordinary explanation.
+
+Note the block really is written by both functions: `1024`/`1025` read `06:30`/`07:01`
+before any grid-first write happened tonight, which is a morning charge window, so the
+batt-first automation does write there too.
+
+**Untested: the reverse direction.** Whether writing batt-first slot 6 corrupts
+grid-first slot 1's window is unknown, and probing it is not free (it enables a
+grid-charge slot and also writes `1090`-`1092`), so it was left alone.
+
+**Practical exposure is nil today** but know the shape of it: the Power Down export
+bursts programme grid-first slots 1-3 minutes before a session and tear them down
+minutes after, while the batt-first slot 6 window is around 06:30, so they never coexist.
+Do not trust `/slots`' `battery_first_slot_6` reading, and treat `grid_first()`'s
+`_write(1026, [0])` as writing something in this murky block rather than as a reliable
+"clear the batt-first slot 6 enable".
 
 ### Known-safe registers for force discharge (use these only)
 
