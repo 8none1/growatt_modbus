@@ -70,7 +70,7 @@ and live data:
 **Battery is CAN bus.** The ESS protocol PDF defines the genuine per-cell voltages at
 `0x0071`-`0x0080` (1 mV each) in the battery's *own* protocol address space, i.e. over CAN to
 the inverter, not in the inverter's Modbus map. So the full per-cell detail is not reachable over
-the EW11; the inverter only proxies a summary (max/min/count) into Modbus.
+the Modbus bridge (dongle or EW11); the inverter only proxies a summary (max/min/count) into Modbus.
 
 > Note: removing `cellVoltage1..16` also removes those keys from the published
 > `growatt/<serial>/state` data. They were mislabelled and not Home Assistant entities, but
@@ -239,11 +239,44 @@ because it only resolves to 0.1 kWh. It is useless as a burst-level stop conditi
 Use the instantaneous `gridExportPowerTotal` (W), which tracked live and responsively,
 and integrate it (a Riemann sum sensor in HA) to get watt-hour resolution.
 
-### Still untested
+### Export limiting (122/123): DO NOT ENABLE. Tested live 2026-09-13, it kills all output
 
-`122`/`123` (export limiting) have **never been written** on this install; both read 0
-live. There is no write path for them in `control.py`. The intended design is
-`122 = 3` (CT clamp, confirmed fitted), `123` = the cap in signed tenths of a percent
-of rated power, with `1070` left at 100, so the inverter's own CT feedback loop holds
-a small export against a rapidly varying house load. Untested pending that write
-support.
+The plan was `122 = 3` (CT clamp) with a small `123`, leaving `1070` at 100, so the
+inverter's own feedback loop would hold a small steady export against a varying house
+load. **It does not work on this hardware.** Tested on WCK0CDE013:
+
+| Write | Result |
+|---|---|
+| FC16 block write of `122`-`123` together | rejected, Modbus exception 3 (illegal data value) |
+| `123` alone (FC06), value 175 | **accepted**, reads back as 17.5 % |
+| `122 = 3` (CT clamp) | rejected, exception 3 (illegal data value) |
+| `122 = 2` (RS232) | rejected, exception 3 (illegal data value) |
+| `122 = 1` (RS485 meter) | **accepted, and it stops the inverter producing anything** |
+
+So only `0` and `1` are legal values; the PDF's four-way enum is wrong for this
+firmware. And enabling it is actively harmful:
+
+    17:53:17  122 = 1 written, 123 = 175 (17.5 %, i.e. a NON-zero limit)
+    17:53:38  battery discharge -> 0 W, house switches fully to grid import
+    ...        stayed clamped for ~7 minutes
+
+Note the limit was **175, not 0**, so this is not "I asked for zero export". Enabling
+the limiter at all zeroes the output, almost certainly because export limitation needs
+an external meter this install does not have, and with nothing to measure the grid with
+the inverter fails safe by shutting output down. It does not limit to the requested
+watts, it limits to nothing.
+
+**Writing `122` back to 0 does NOT recover it.** The registers read healthy again
+(`122 = 0`, `123 = 0`, `1070 = 100`, `1071 = 25`, `priorityMode = 0`) while the battery
+stayed at 0 W and the house kept importing. A full-payload diff against a known-good
+sample from earlier the same evening showed **no** register difference at all, so the
+clamp is latched internally and is not visible in the Modbus map.
+
+**Recovery: write a priority mode.** The `load_first` action (which writes the
+batt-first slot 6 and grid-first enables) cleared it immediately: discharge resumed at
+1030 W with zero import on the very next poll. Worth knowing before anyone panics and
+starts pulling isolators.
+
+`control.set_export_limit()` therefore refuses any mode other than 0 unless you pass
+`force=True`, and the HTTP API does not expose `force`. Register `123` is safe to write
+on its own and is inert while `122` is 0.

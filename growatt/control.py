@@ -319,7 +319,8 @@ class InverterControl:
         raw = r[1] - 65536 if r[1] > 32767 else r[1]  # 123 is signed
         return {"mode": r[0], "rate_raw": raw, "rate_percent": raw / 10.0}
 
-    def set_export_limit(self, mode, rate_percent=None, watts=None, rated_power_w=None):
+    def set_export_limit(self, mode, rate_percent=None, watts=None, rated_power_w=None,
+                         force=False):
         """Cap what reaches the grid from any source (registers 122/123).
 
         This does NOT make the battery export; it is a ceiling on export that is
@@ -329,8 +330,12 @@ class InverterControl:
         rate, not an export setpoint (live-verified 2026-09-13, see REGISTERS.md),
         so a low 1070 starves the house and pulls the shortfall off the grid.
 
-        The intended pairing is grid_first(rate_percent=100) for a generous
-        discharge, plus a small limit here to trim the surplus.
+        THAT PLAN DOES NOT WORK ON THIS HARDWARE, and this method is kept for
+        the record rather than for use. See the mode != 0 guard below and the
+        "Export limiting" section of REGISTERS.md. Enabling the limiter stops
+        the inverter producing anything at all, which is the opposite of a
+        trimmed export. Use a short full-rate grid_first burst instead: cap the
+        energy by shortening the window, since the power cannot be capped.
 
         mode (register 122): 0 disable, 1 RS485 meter, 2 RS232, 3 CT clamp.
         rate (register 123): signed tenths of a percent of rated power, so 15 %
@@ -349,6 +354,17 @@ class InverterControl:
         if mode not in (0, 1, 2, 3):
             raise ValueError("invalid export limit mode %s (0 disable, 1 RS485 "
                              "meter, 2 RS232, 3 CT clamp)" % mode)
+        if mode != 0 and not force:
+            raise ValueError(
+                "refusing to enable the export limiter: on this SPH it kills all "
+                "inverter output. Tested live 2026-09-13: modes 2 and 3 are "
+                "rejected outright (Modbus exception 3, illegal data value), and "
+                "mode 1 is accepted but stops the battery discharging within ~20 s "
+                "even with a non-zero limit, so the house goes fully onto the grid. "
+                "Writing 122 back to 0 does NOT restore it; recovery needs a "
+                "priority-mode write (load_first). Pass force=True only if you are "
+                "watching the inverter and ready to recover it."
+            )
 
         if watts is not None:
             if rate_percent is not None:
