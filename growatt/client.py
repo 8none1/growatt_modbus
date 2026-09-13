@@ -66,18 +66,59 @@ def read_input_registers(client, start_address, count, device_id=None):
         return None
 
 
+def _describe_error(response):
+    """Pull the Modbus exception code out of an error response, for the log.
+
+    Worth the detail: "illegal data address" (register not writable here) and
+    "illegal data value" (value rejected) point at completely different fixes,
+    and a bare "Error writing" tells you neither.
+    """
+    code = getattr(response, "exception_code", None)
+    names = {
+        1: "illegal function",
+        2: "illegal data address",
+        3: "illegal data value",
+        4: "slave device failure",
+        6: "slave device busy",
+    }
+    if code is None:
+        return repr(response)
+    return "exception %s (%s)" % (code, names.get(code, "unknown"))
+
+
 def write_registers(client, start_address, values, device_id=None):
-    """Write holding registers to Modbus. Returns True on success."""
+    """Write holding registers to Modbus with FC16. Returns True on success."""
     kwargs = {} if device_id is None else {"device_id": device_id}
     try:
         response = client.write_registers(address=start_address, values=values, **kwargs)
         if response.isError():
-            log.warning("Error writing registers %s-%s",
-                        start_address, start_address + len(values) - 1)
+            log.warning("Error writing registers %s-%s: %s",
+                        start_address, start_address + len(values) - 1,
+                        _describe_error(response))
             return False
         return True
     except Exception as e:
         log.warning("Modbus write error: %s", e)
+        return False
+
+
+def write_single_register(client, address, value, device_id=None):
+    """Write one holding register with FC06. Returns True on success.
+
+    Some registers refuse a multi-register FC16 write but accept FC06 one at a
+    time, so this is the fallback for a register that reports illegal function
+    or illegal data address under a block write.
+    """
+    kwargs = {} if device_id is None else {"device_id": device_id}
+    try:
+        response = client.write_register(address=address, value=value, **kwargs)
+        if response.isError():
+            log.warning("Error writing register %s (FC06): %s",
+                        address, _describe_error(response))
+            return False
+        return True
+    except Exception as e:
+        log.warning("Modbus single write error on %s: %s", address, e)
         return False
 
 

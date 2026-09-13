@@ -12,7 +12,8 @@ import logging
 
 from pymodbus.client import ModbusTcpClient
 
-from .client import read_holding_registers, write_registers, set_inverter_time
+from .client import (read_holding_registers, write_registers,
+                     write_single_register, set_inverter_time)
 from ._modbus_lock import MODBUS_LOCK
 
 log = logging.getLogger("growatt")
@@ -103,6 +104,9 @@ class InverterControl:
 
     def _write(self, address, values):
         return write_registers(self.client, address, values, device_id=self.device_id)
+
+    def _write_single(self, address, value):
+        return write_single_register(self.client, address, value, device_id=self.device_id)
 
     # -- time --
     def set_time(self):
@@ -360,9 +364,35 @@ class InverterControl:
         raw = max(-1000, min(1000, raw))
 
         log.info("[EL] mode=%s rate=%.1f%% (register 123 = %s)", mode, raw / 10.0, raw)
-        # 122/123 are consecutive, so one write covers both. 123 is signed, and a
-        # Modbus register is unsigned on the wire, so send two's complement.
-        self._write(122, [mode, raw & 0xFFFF])
+        # 123 is signed, and a Modbus register is unsigned on the wire, so send
+        # two's complement.
+        encoded = raw & 0xFFFF
+        # A block FC16 write of 122-123 was REJECTED by the SPH (2026-09-13), so
+        # write each register on its own with FC06 and fall back to FC16 per
+        # register. Order matters: set the rate before enabling the limiter, so
+        # the inverter never sees mode 3 alongside a stale rate.
+        for address, value in ((123, encoded), (122, mode)):
+            if self._write_single(address, value):
+                continue
+            log.info("[EL] FC06 failed on %s, retrying as a single-register FC16",
+                     address)
+            if not self._write(address, [value]):
+                raise RuntimeError(
+                    "inverter refused the write to register %s (value %s); the "
+                    "export limiter could not be set" % (address, value)
+                )
+
+        # Never report success on an unverified write: this register pair governs
+        # how much PV can leave the house, so a silent no-op is worse than an error.
+        readback = self.get_export_limit()
+        if readback is None:
+            raise RuntimeError("wrote the export limit but could not read it back")
+        if readback["mode"] != mode or readback["rate_raw"] != raw:
+            raise RuntimeError(
+                "export limit did not stick: asked for mode=%s rate=%s, "
+                "reads back mode=%s rate=%s" % (mode, raw, readback["mode"],
+                                                readback["rate_raw"])
+            )
         return {"mode": mode, "rate_percent": raw / 10.0, "rate_raw": raw}
 
     def clear_all_slots(self):
