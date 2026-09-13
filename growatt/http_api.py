@@ -10,6 +10,9 @@ Endpoints (port from config["http"]["port"], default 8085):
                    In-memory only: reflects how long since the control inverter was
                    last read successfully by the poll loop. Never touches Modbus.
   GET  /slots   -> 200 {"status":"success","slots":{...}}   (reads under the lock)
+  GET  /export_limit
+                -> 200 {"status":"success","export_limit":{"mode":N,"rate_percent":N}}
+                   Registers 122/123, for checking the limiter is disarmed.
   POST /mode    -> {"action": "...", "duration": N, "slot_num": N}
                    Action strings are unchanged from the old CGI so Home Assistant
                    payloads only needed their URL repointed.
@@ -81,8 +84,8 @@ def _apply_mode(inv, body, config=None):
         # export; 1070 alone cannot do that (see control.set_export_limit).
         #   mode          -> 0 disable, 1 RS485 meter, 2 RS232, 3 CT clamp
         #   rate_percent  -> the cap as a % of rated power (0.1 % resolution)
-        #   watts         -> the cap in watts (needs control.rated_power_w; the
-        #                    percentage base is unverified, prefer rate_percent)
+        #   watts         -> the cap in watts, converted against control.rated_power_w
+        #                    (4000 W, the battery's real ceiling, not the nameplate)
         rated = (config or {}).get("control", {}).get("rated_power_w")
         resolved = inv.set_export_limit(
             body.get("mode"),

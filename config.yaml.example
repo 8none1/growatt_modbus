@@ -62,8 +62,15 @@ health:
 control:
   device: inverter1          # name from the devices list above (defaults to the first)
   device_id: 1               # Modbus unit id
-  # Rated inverter power (W). Only used to turn an `export_watts` request on the
-  # grid-first endpoint into a discharge-rate percent (register 1070). Leave unset
-  # to require callers to pass `rate_percent` directly. Set to your SPH's rating,
-  # e.g. 3600 for an SPH 3600.
-  # rated_power_w: 3600
+  # Power base (W) used to turn a wattage request into a percent, for the
+  # grid-first discharge rate (register 1070, `export_watts`) and the export
+  # limit (register 123, `watts`). Leave unset to require callers to pass a
+  # percent directly.
+  #
+  # This is NOT the inverter's nameplate rating. Measured on an SPH-5000
+  # (WCK0CDE013) on 2026-09-13: commanding register 1070 = 40 produced exactly
+  # 1600 W of discharge, i.e. 40 % of 4000 W, and 4000 W is also the highest
+  # discharge seen in a fortnight of history. Using the 5000 W nameplate here
+  # would make every wattage request about 20 % optimistic. Set this to what the
+  # battery can actually deliver.
+  rated_power_w: 4000

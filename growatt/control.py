@@ -333,10 +333,11 @@ class InverterControl:
           is written as 150. Give the percent directly with rate_percent, or by
           wattage with watts (needs rated_power_w).
 
-        CAUTION on the wattage conversion: register 123's percentage base is
-        NOT verified. Register 1070's base measured as ~4000 W, not the SPH-5000
-        nameplate, so 123 may well behave the same. Prefer rate_percent and
-        measure what you actually get before trusting watts.
+        The wattage conversion uses control.rated_power_w, which is the battery's
+        real 4000 W delivery ceiling, not the SPH-5000 nameplate: register 1070 = 40
+        measured as exactly 1600 W, i.e. 40 % of 4000 W. Register 123's own base is
+        not independently confirmed, so on the first run compare the export you
+        actually get against the wattage you asked for.
 
         Returns the resolved {mode, rate_percent, rate_raw}.
         """
