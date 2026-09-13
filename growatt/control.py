@@ -112,6 +112,10 @@ class InverterControl:
     def set_time(self):
         set_inverter_time(self.client, device_id=self.device_id)
 
+    def read_registers(self, start, count):
+        """Read-only peek at a holding register block. None on a bad/short read."""
+        return self._read(int(start), int(count))
+
     # -- read all slots --
     def get_all_slots(self):
         slots = {}

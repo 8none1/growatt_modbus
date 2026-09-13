@@ -10,6 +10,10 @@ Endpoints (port from config["http"]["port"], default 8085):
                    In-memory only: reflects how long since the control inverter was
                    last read successfully by the poll loop. Never touches Modbus.
   GET  /slots   -> 200 {"status":"success","slots":{...}}   (reads under the lock)
+  GET  /registers?start=N&count=M
+                -> 200 {"status":"success","values":{"<reg>":val,...}}
+                   Read-only peek at any holding block (count 1-64). No write
+                   counterpart on purpose.
   GET  /export_limit
                 -> 200 {"status":"success","export_limit":{"mode":N,"rate_percent":N}}
                    Registers 122/123, for checking the limiter is disarmed.
@@ -144,6 +148,35 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"status": "success", "slots": slots})
             except Exception as e:
                 log.warning("GET /slots failed: %s", e)
+                return self._send(500, {"status": "error", "message": str(e)})
+        if path == "/registers":
+            # Read-only peek at any holding register block, for investigating
+            # things the decoder does not expose (e.g. 180 MeterLink, 533
+            # LimitDevice). Read-only by design: there is deliberately no write
+            # counterpart, because a stray write here could stop the inverter.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                start = int(q.get("start", ["0"])[0])
+                count = int(q.get("count", ["1"])[0])
+            except ValueError:
+                return self._send(400, {"status": "error",
+                                        "message": "start and count must be integers"})
+            if not (0 <= start <= 65535) or not (1 <= count <= 64):
+                return self._send(400, {"status": "error",
+                                        "message": "start 0-65535, count 1-64"})
+            try:
+                regs = with_control_session(
+                    self.server.gw_config,
+                    lambda inv: inv.read_registers(start, count))
+                if regs is None:
+                    return self._send(502, {"status": "error",
+                                            "message": "read failed or returned short"})
+                return self._send(200, {"status": "success", "start": start,
+                                        "values": {str(start + i): v
+                                                   for i, v in enumerate(regs)}})
+            except Exception as e:
+                log.warning("GET /registers failed: %s", e)
                 return self._send(500, {"status": "error", "message": str(e)})
         if path == "/export_limit":
             try:
