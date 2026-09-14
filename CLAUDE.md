@@ -104,6 +104,13 @@ per-cell detail is not reachable over the EW11; that would need a CAN interface.
   `~/docker/growatt_modbus/` holds a standalone `docker-compose.yml` (referencing the GHCR
   image) and the real `config/config.yaml`. Deploy/update is just:
   `cd ~/docker/growatt_modbus && docker compose pull && docker compose up -d`.
+- **The push trigger only fires on `main`**, and pull-request builds deliberately do not
+  publish. To get an image from a branch without touching `main`, use
+  `gh workflow run docker-publish.yml --ref <branch>`: `workflow_dispatch` does publish,
+  tagged with the branch name (`ghcr.io/8none1/growatt_modbus:<branch>`).
+- `control.rated_power_w` is **4000** in the deployed config, not the SPH-5000 nameplate.
+  Measured: register 1070 at 40 % produced exactly 1600 W. Using 5000 makes every wattage
+  request ~20 % optimistic. See REGISTERS.md.
 - **Control + health are now in this same container** (merged 2026-06-16). It uses
   `network_mode: host` and serves HTTP on :8085. HA rest_commands POST to
   `http://192.168.42.241:8085/mode` (was `/cgi-bin/switch_inverter_mode.py`); the Docker
@@ -179,6 +186,26 @@ Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
   protocol PDF tables (0x0014 protection, 0x0022 warning). The 8 system-fault words
   (input 1001-1008) are NOT decodable from our manual (it defers to a fault list we lack).
 - Retire the integral-based Grafana energy panels once the register meters are trusted.
+
+**Force discharge / export (settled 2026-09-13, see REGISTERS.md and PR #24):**
+- Register **1070 is a discharge cap**, not an export setpoint. A low rate starves the
+  house and pulls the shortfall off the grid. Leave it at 100 and shorten the window
+  instead. This closes the blocking unknown in `POWER_DOWN_EXPORT_PLAN.md`.
+- **Never enable the export limiter (register 122).** Only 0 and 1 are legal here, 1 is
+  the RS485-meter variant, there is no meter, and enabling it takes the inverter to zero
+  output. Recovery is a priority-mode write (`load_first`), not writing 122 back to 0.
+- **Register 1026 is not the batt-first slot 6 enable** despite the name and the comment
+  in `control.py`; something at the start of every `grid_first()` call copies 1080/1081
+  into 1024/1025, so `GET /slots`' `battery_first_slot_6` is not a charge slot.
+- A one-minute grid-first slot is a **~123 second** burst (enters +15 s, leaves +78 s),
+  so always end it with an explicit enable write rather than letting the window expire,
+  and remember grid-first slots repeat daily.
+- Grid-first slots **4-6 are do-not-use** (they map into the murky 1018-1035 block). The
+  code still exposes them; tightening `grid_first()`/`disable_grid_first_slot()` to
+  reject them is a sensible follow-up.
+- The consumer is `packages/power_down_export.yaml` in Home Assistant, driving
+  `POST /mode` via two new rest_commands. Policy lives in HA, this repo just takes a slot
+  and an absolute window.
 
 **Long-term ("one day"):**
 - A proper Home Assistant custom component / HACS integration instead of MQTT discovery.
