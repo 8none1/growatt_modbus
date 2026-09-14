@@ -10,6 +10,13 @@ Endpoints (port from config["http"]["port"], default 8085):
                    In-memory only: reflects how long since the control inverter was
                    last read successfully by the poll loop. Never touches Modbus.
   GET  /slots   -> 200 {"status":"success","slots":{...}}   (reads under the lock)
+  GET  /registers?start=N&count=M
+                -> 200 {"status":"success","values":{"<reg>":val,...}}
+                   Read-only peek at any holding block (count 1-64). No write
+                   counterpart on purpose.
+  GET  /export_limit
+                -> 200 {"status":"success","export_limit":{"mode":N,"rate_percent":N}}
+                   Registers 122/123, for checking the limiter is disarmed.
   POST /mode    -> {"action": "...", "duration": N, "slot_num": N}
                    Action strings are unchanged from the old CGI so Home Assistant
                    payloads only needed their URL repointed.
@@ -34,6 +41,7 @@ _WRITE_ACTIONS = {
     "disable_batt_first_slot",
     "disable_grid_first_slot",
     "clear_all_slots",
+    "set_export_limit",
 }
 
 
@@ -74,6 +82,22 @@ def _apply_mode(inv, body, config=None):
     if action == "disable_grid_first_slot":
         inv.disable_grid_first_slot(body.get("slot_num"))
         return {"status": "success"}
+    if action == "set_export_limit":
+        # Ceiling on export to the grid from any source (registers 122/123). Pair a
+        # small limit here with grid_first(rate_percent=100) to hold a steady small
+        # export; 1070 alone cannot do that (see control.set_export_limit).
+        #   mode          -> 0 disable, 1 RS485 meter, 2 RS232, 3 CT clamp
+        #   rate_percent  -> the cap as a % of rated power (0.1 % resolution)
+        #   watts         -> the cap in watts, converted against control.rated_power_w
+        #                    (4000 W, the battery's real ceiling, not the nameplate)
+        rated = (config or {}).get("control", {}).get("rated_power_w")
+        resolved = inv.set_export_limit(
+            body.get("mode"),
+            rate_percent=body.get("rate_percent"),
+            watts=body.get("watts"),
+            rated_power_w=rated,
+        )
+        return {"status": "success", **resolved}
     if action == "clear_all_slots":
         inv.clear_all_slots()
         return {"status": "success"}
@@ -124,6 +148,43 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"status": "success", "slots": slots})
             except Exception as e:
                 log.warning("GET /slots failed: %s", e)
+                return self._send(500, {"status": "error", "message": str(e)})
+        if path == "/registers":
+            # Read-only peek at any holding register block, for investigating
+            # things the decoder does not expose (e.g. 180 MeterLink, 533
+            # LimitDevice). Read-only by design: there is deliberately no write
+            # counterpart, because a stray write here could stop the inverter.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                start = int(q.get("start", ["0"])[0])
+                count = int(q.get("count", ["1"])[0])
+            except ValueError:
+                return self._send(400, {"status": "error",
+                                        "message": "start and count must be integers"})
+            if not (0 <= start <= 65535) or not (1 <= count <= 64):
+                return self._send(400, {"status": "error",
+                                        "message": "start 0-65535, count 1-64"})
+            try:
+                regs = with_control_session(
+                    self.server.gw_config,
+                    lambda inv: inv.read_registers(start, count))
+                if regs is None:
+                    return self._send(502, {"status": "error",
+                                            "message": "read failed or returned short"})
+                return self._send(200, {"status": "success", "start": start,
+                                        "values": {str(start + i): v
+                                                   for i, v in enumerate(regs)}})
+            except Exception as e:
+                log.warning("GET /registers failed: %s", e)
+                return self._send(500, {"status": "error", "message": str(e)})
+        if path == "/export_limit":
+            try:
+                limit = with_control_session(self.server.gw_config,
+                                             lambda inv: inv.get_export_limit())
+                return self._send(200, {"status": "success", "export_limit": limit})
+            except Exception as e:
+                log.warning("GET /export_limit failed: %s", e)
                 return self._send(500, {"status": "error", "message": str(e)})
         return self._send(404, {"status": "error", "message": "not found: %s" % path})
 

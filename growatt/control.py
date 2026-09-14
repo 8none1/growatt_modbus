@@ -12,7 +12,8 @@ import logging
 
 from pymodbus.client import ModbusTcpClient
 
-from .client import read_holding_registers, write_registers, set_inverter_time
+from .client import (read_holding_registers, write_registers,
+                     write_single_register, set_inverter_time)
 from ._modbus_lock import MODBUS_LOCK
 
 log = logging.getLogger("growatt")
@@ -104,9 +105,16 @@ class InverterControl:
     def _write(self, address, values):
         return write_registers(self.client, address, values, device_id=self.device_id)
 
+    def _write_single(self, address, value):
+        return write_single_register(self.client, address, value, device_id=self.device_id)
+
     # -- time --
     def set_time(self):
         set_inverter_time(self.client, device_id=self.device_id)
+
+    def read_registers(self, start, count):
+        """Read-only peek at a holding register block. None on a bad/short read."""
+        return self._read(int(start), int(count))
 
     # -- read all slots --
     def get_all_slots(self):
@@ -305,6 +313,107 @@ class InverterControl:
             return
         log.info("Disabling grid-first slot %d (register %d = 0)", slot_num, enable_reg)
         self._write(enable_reg, [0])
+
+    # -- export limiting (holding 122/123) --
+    def get_export_limit(self):
+        """Read the export limiter: {mode, rate_raw, rate_percent}. None on a bad read."""
+        r = self._read(122, 2)
+        if not r:
+            return None
+        raw = r[1] - 65536 if r[1] > 32767 else r[1]  # 123 is signed
+        return {"mode": r[0], "rate_raw": raw, "rate_percent": raw / 10.0}
+
+    def set_export_limit(self, mode, rate_percent=None, watts=None, rated_power_w=None,
+                         force=False):
+        """Cap what reaches the grid from any source (registers 122/123).
+
+        This does NOT make the battery export; it is a ceiling on export that is
+        already happening. Its value is that the inverter regulates to it with its
+        own CT feedback loop, so it holds a small steady export against a rapidly
+        varying house load. Register 1070 cannot do that: it is a fixed discharge
+        rate, not an export setpoint (live-verified 2026-09-13, see REGISTERS.md),
+        so a low 1070 starves the house and pulls the shortfall off the grid.
+
+        THAT PLAN DOES NOT WORK ON THIS HARDWARE, and this method is kept for
+        the record rather than for use. See the mode != 0 guard below and the
+        "Export limiting" section of REGISTERS.md. Enabling the limiter stops
+        the inverter producing anything at all, which is the opposite of a
+        trimmed export. Use a short full-rate grid_first burst instead: cap the
+        energy by shortening the window, since the power cannot be capped.
+
+        mode (register 122): 0 disable, 1 RS485 meter, 2 RS232, 3 CT clamp.
+        rate (register 123): signed tenths of a percent of rated power, so 15 %
+          is written as 150. Give the percent directly with rate_percent, or by
+          wattage with watts (needs rated_power_w).
+
+        The wattage conversion uses control.rated_power_w, which is the battery's
+        real 4000 W delivery ceiling, not the SPH-5000 nameplate: register 1070 = 40
+        measured as exactly 1600 W, i.e. 40 % of 4000 W. Register 123's own base is
+        not independently confirmed, so on the first run compare the export you
+        actually get against the wattage you asked for.
+
+        Returns the resolved {mode, rate_percent, rate_raw}.
+        """
+        mode = int(mode)
+        if mode not in (0, 1, 2, 3):
+            raise ValueError("invalid export limit mode %s (0 disable, 1 RS485 "
+                             "meter, 2 RS232, 3 CT clamp)" % mode)
+        if mode != 0 and not force:
+            raise ValueError(
+                "refusing to enable the export limiter: on this SPH it kills all "
+                "inverter output. Tested live 2026-09-13: modes 2 and 3 are "
+                "rejected outright (Modbus exception 3, illegal data value), and "
+                "mode 1 is accepted but stops the battery discharging within ~20 s "
+                "even with a non-zero limit, so the house goes fully onto the grid. "
+                "Writing 122 back to 0 does NOT restore it; recovery needs a "
+                "priority-mode write (load_first). Pass force=True only if you are "
+                "watching the inverter and ready to recover it."
+            )
+
+        if watts is not None:
+            if rate_percent is not None:
+                raise ValueError("give either rate_percent or watts, not both")
+            if not rated_power_w:
+                raise ValueError("watts needs rated_power_w to convert to a percent "
+                                 "(set control.rated_power_w in config)")
+            rate_percent = 100.0 * float(watts) / float(rated_power_w)
+
+        if rate_percent is None:
+            rate_percent = 0.0 if mode == 0 else 100.0
+        raw = int(round(float(rate_percent) * 10))
+        raw = max(-1000, min(1000, raw))
+
+        log.info("[EL] mode=%s rate=%.1f%% (register 123 = %s)", mode, raw / 10.0, raw)
+        # 123 is signed, and a Modbus register is unsigned on the wire, so send
+        # two's complement.
+        encoded = raw & 0xFFFF
+        # A block FC16 write of 122-123 was REJECTED by the SPH (2026-09-13), so
+        # write each register on its own with FC06 and fall back to FC16 per
+        # register. Order matters: set the rate before enabling the limiter, so
+        # the inverter never sees mode 3 alongside a stale rate.
+        for address, value in ((123, encoded), (122, mode)):
+            if self._write_single(address, value):
+                continue
+            log.info("[EL] FC06 failed on %s, retrying as a single-register FC16",
+                     address)
+            if not self._write(address, [value]):
+                raise RuntimeError(
+                    "inverter refused the write to register %s (value %s); the "
+                    "export limiter could not be set" % (address, value)
+                )
+
+        # Never report success on an unverified write: this register pair governs
+        # how much PV can leave the house, so a silent no-op is worse than an error.
+        readback = self.get_export_limit()
+        if readback is None:
+            raise RuntimeError("wrote the export limit but could not read it back")
+        if readback["mode"] != mode or readback["rate_raw"] != raw:
+            raise RuntimeError(
+                "export limit did not stick: asked for mode=%s rate=%s, "
+                "reads back mode=%s rate=%s" % (mode, raw, readback["mode"],
+                                                readback["rate_raw"])
+            )
+        return {"mode": mode, "rate_percent": raw / 10.0, "rate_raw": raw}
 
     def clear_all_slots(self):
         log.info("Clearing all battery first slots (1100-1108)")
