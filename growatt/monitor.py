@@ -167,16 +167,34 @@ def read_inverter_input_registers(client):
     input_registers['bmsDeltaV']                    = registers[94]
     input_registers['bmsCycleCount']                = registers[95]
     input_registers['bmsSOH']                       = registers[96]
-    # --- BMS cell summary (1108-1110 confirmed against the PDF and live data). ---
-    # NB: 1108-1123 is NOT a 16-cell voltage array (the old 'cellVoltage1..16' was wrong).
-    # The true per-cell voltages live in the battery's own CAN/ESS protocol (0x0071+), not Modbus.
+    # --- BMS gauge block (1087-1099). Names per the Growatt V1.24 PDF, units validated live
+    # 2026-09-18 on the GBLI6532 pair: 1087 = 5370 with battVoltage 53.7 V, 1088 = 5750 while the
+    # inverter reported 2960 W of charging (55 A), 1091/1092 = 6110/21580 with RM/FCC = 28.3 %
+    # against a BMS SOC of 27-28 %. 1090 read 17620 = 176.2 A for two packs (~104 A each rated).
+    input_registers['bmsVoltage']                   = round(registers[87] * 0.01, 2)   # V
+    # Current sign convention: positive was observed while charging. Discharge is assumed to be
+    # the two's-complement negative (as in the CAN 0x313 Sint16 field); unverified on this firmware.
+    bms_curr = registers[88] - 65536 if registers[88] > 32767 else registers[88]
+    input_registers['bmsCurrent']                   = round(bms_curr * 0.01, 2)        # A
+    input_registers['bmsMaxChargeCurrent']          = round(registers[90] * 0.01, 1)   # A
+    input_registers['bmsGaugeRM']                   = round(registers[91] * 0.01, 2)   # Ah remaining
+    input_registers['bmsGaugeFCC']                  = round(registers[92] * 0.01, 2)   # Ah full-charge capacity
+    input_registers['bmsFirmware']                  = registers[93]                    # raw version word
+    input_registers['bmsConstantVolt']              = round(registers[97] * 0.01, 2)   # V, CV charge target
+    input_registers['bmsWarnInfo']                  = registers[99]                    # bitfield, 0 = no warnings
+    # 1100-1107 (gauge IC current, gauge/FR versions, using cap) read 0 on this pack; 1105/1106
+    # (BMS/pack info) are a static 0x4150. Deliberately not decoded.
+    # --- BMS cell block (1108-1123). ---
     input_registers['maxCellVoltage']               = round(registers[108] * 0.001, 3)  # V
     input_registers['minCellVoltage']               = round(registers[109] * 0.001, 3)  # V
     input_registers['batteryModuleCount']           = registers[110]
-    # 1111-1123: PDF labels these as counts/indices/temps/SOC/error words, but the live values
-    # contradict that on this firmware. Captured raw under their address, meaning UNCONFIRMED.
-    for addr in range(1111, 1124):
-        input_registers["bmsReg" + str(addr)]       = registers[addr - 1000]
+    # 1111 reads a constant 3600 (the 3.600 V cell over-voltage limit, not a cell).
+    # 1112-1123: the PDF labels these as cell numbers / temperatures / parallel SOC, but on this
+    # firmware they are twelve live cell voltages in mV: their max and min equal 1108/1109 on every
+    # sample (verified 2026-09-18 over consecutive polls and a paused one-off read). Publish them as
+    # cellVoltage1..12. Whether the pack's other four cells are simply not proxied is unknown.
+    for i in range(12):
+        input_registers['cellVoltage%d' % (i + 1)]  = round(registers[112 + i] * 0.001, 3)  # V
     # Storage AC-charge energy and self-consumption energy (separate read; past the 124-register window).
     registers = read_input_registers(client, 1124, 21)  # 1124-1144
     if not registers:

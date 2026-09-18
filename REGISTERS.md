@@ -52,29 +52,43 @@ for case-by-case review because the PDF is unreliable.
 - **`inverterStatus` (input 0):** the code comment "seems to be 6 at night" more likely refers to
   `systemWorkMode` (input 1000), which uses higher mode codes.
 
-## The cell-voltage block (input 1108-1123): fixed
+## The BMS gauge block (input 1087-1099): decoded 2026-09-18
 
-The old code labelled input 1108-1123 as `cellVoltage1..16`. This was wrong. Per the PDF
-and live data:
+Read live from inverter 1 (poller paused, two passes 2 s apart, all stable) and checked
+against the Growatt V1.24 PDF names:
 
-- **1108 = max cell voltage** (×0.001 V), **1109 = min cell voltage** (×0.001 V),
-  **1110 = battery module/parallel count.** These are now read as `maxCellVoltage`,
-  `minCellVoltage`, `batteryModuleCount`.
-- **1111** is an outlier (live 3600, above the max cell voltage, so not a cell). PDF guesses
-  "number of batteries"; unconfirmed.
-- **1112-1123** read as 12 values that all sit inside the min/max cell envelope and rise/fall
-  together with charge state, so they are *probably* 12 individual cell voltages in mV, which
-  contradicts the PDF (which lists indices/temps/SOC/error words there). Kept as raw `bmsReg1111`
-  .. `bmsReg1123` with meaning UNCONFIRMED pending observation over a full charge/discharge cycle.
+| reg | field | value seen | meaning |
+|---|---|---|---|
+| 1087 | `bmsVoltage` | 5370 | pack voltage x0.01 V = 53.70 V (matched `battVoltage`) |
+| 1088 | `bmsCurrent` | 5750 | x0.01 A = 57.5 A charging (inverter reported 2960 W / 53.7 V = 55 A); positive while charging, discharge sign assumed negative, unverified |
+| 1090 | `bmsMaxChargeCurrent` | 17620 | x0.01 A = 176.2 A for two packs |
+| 1091 | `bmsGaugeRM` | 6110 | remaining capacity, 10 mAh units = 61.10 Ah |
+| 1092 | `bmsGaugeFCC` | 21580 | full-charge capacity, 10 mAh units = 215.8 Ah. RM/FCC = 28.3 % vs BMS SOC 27-28 %, so both are what they claim |
+| 1093 | `bmsFirmware` | 0x8686 | raw version word |
+| 1097 | `bmsConstantVolt` | 5680 | CV charge target x0.01 V = 56.80 V |
+| 1099 | `bmsWarnInfo` | 0 | warning bitfield (1098 is the "old" copy) |
 
-**Battery is CAN bus.** The ESS protocol PDF defines the genuine per-cell voltages at
-`0x0071`-`0x0080` (1 mV each) in the battery's *own* protocol address space, i.e. over CAN to
-the inverter, not in the inverter's Modbus map. So the full per-cell detail is not reachable over
-the Modbus bridge (dongle or EW11); the inverter only proxies a summary (max/min/count) into Modbus.
+1100-1107 read 0 (1105/1106 a static 0x4150) and are not decoded. FCC is the battery's own
+capacity estimate: 215.8 Ah against a 256 Ah gross nameplate, or 94 % of the 230 Ah usable at
+90 % DoD, which matches the reported SOH of 93 %.
 
-> Note: removing `cellVoltage1..16` also removes those keys from the published
-> `growatt/<serial>/state` data. They were mislabelled and not Home Assistant entities, but
-> check nothing downstream consumed them.
+## The cell-voltage block (input 1108-1123): resolved
+
+- **1108 = max cell voltage** (x0.001 V), **1109 = min cell voltage** (x0.001 V),
+  **1110 = battery module/parallel count.** Read as `maxCellVoltage`, `minCellVoltage`,
+  `batteryModuleCount`.
+- **1111** is a constant 3600: the 3.600 V cell over-voltage limit, not a cell. Not published.
+- **1112-1123 are twelve individual cell voltages in mV**, published as `cellVoltage1..12`.
+  The PDF labels these addresses as cell numbers, cell temperatures and parallel max/min SOC,
+  but on this firmware (GBLI6532 x2 on SPH-5000) the twelve values track the cell envelope
+  exactly: their max and min equal 1108/1109 on every sample, including a paused one-off read
+  where the poller could not have interfered. Why only 12 of the 16 cells appear is unknown.
+  The earlier note here that this was "NOT a cell voltage array" was wrong. The old
+  `bmsReg1111..1123` raw keys are gone from the state payload; nothing downstream used them.
+
+**Battery is CAN bus.** The GBLI6532 PCS port carries CAN (pins 4/5, 500 kbps, Growatt
+"BMS CAN-Bus protocol, low voltage"); the inverter proxies the frames above into Modbus. What
+is genuinely not available over Modbus is per-pack data (the inter-pack Link-In/Link-Out bus).
 
 ## New registers added this round (validated live, all useful)
 
