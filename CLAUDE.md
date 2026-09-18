@@ -89,12 +89,14 @@ Inverter --RS485--> EW11 / reflashed ShineWiFi-X dongle (:502) --Modbus TCP-->  
 
 ## Battery / CAN bus
 
-The BMS values (`bms*`, `maxCellVoltage`/`minCellVoltage`) are read from the inverter's
-Modbus registers, which the inverter populates from the battery. The battery pack talks
-**CAN bus** to the inverter (confirmed: the ESS protocol PDF defines the genuine per-cell
-voltages at `0x0071`+ in the battery's own CAN address space, not in Modbus). The inverter
-only proxies a BMS *summary* (max/min cell voltage, module count) into Modbus, so full
-per-cell detail is not reachable over the EW11; that would need a CAN interface.
+The BMS values (`bms*`, `maxCellVoltage`/`minCellVoltage`, `cellVoltage1..12`) are read from
+the inverter's Modbus registers, which the inverter populates from the battery. The battery
+pack (2x GBLI6532) talks **CAN bus** to the inverter (PCS port pins 4/5, 500 kbps, Growatt's
+published low-voltage BMS CAN protocol). The inverter proxies a lot more than a summary:
+SOC/SOH/cycles, pack voltage and current, the gauge's remaining and full-charge capacity
+(1091/1092), the CV target, warning bits, max/min cell and twelve individual cell voltages.
+What Modbus cannot give is per-pack detail, which lives on the inter-pack Link-In/Link-Out bus.
+See REGISTERS.md for the decode.
 
 ## Deployment (perceptron)
 
@@ -162,8 +164,9 @@ Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
 - NB: `battTemperature` (input 1040) must stay raw, the PDF's ×0.1 is wrong (live 19 = 19°C).
 
 **Bake / observe (no code yet):**
-- Confirm `bmsReg1112-1123` really are per-cell voltages (watch over a charge/discharge cycle),
-  then rename from raw `bmsReg*` to cell voltages.
+- DONE 2026-09-18: `bmsReg1112-1123` confirmed as per-cell voltages, now `cellVoltage1..12`.
+- Verify the `bmsCurrent` sign during discharge (assumed negative two's complement).
+- Graph `bmsGaugeFCC` in Grafana as the long-term degradation trend.
 - Watch the combined HA helper `sensor.growatt_site_load_energy_total` tracks total house load
   sensibly (the "let's try it" one).
 - Watch the read-health diagnostics (`growatt/<serial>/diagnostics`, the HA "Garbled reads /
@@ -182,8 +185,8 @@ Captured for the next session. Full discrepancy detail is in `REGISTERS.md`.
 
 **Long-term ("one day"):**
 - A proper Home Assistant custom component / HACS integration instead of MQTT discovery.
-- A CAN-bus reader for full per-cell battery detail (the inverter only proxies a BMS summary
-  over Modbus; true per-cell voltages live in the battery's CAN/ESS protocol at 0x0071+).
+- A CAN-bus sniffer on the battery PCS port for per-pack detail (the only thing the inverter
+  does not proxy over Modbus).
 
 **Context worth knowing (see also the memory files):**
 - The charge schedule is driven by Will's `octopus_agile_battery_scheduler` (a daily cron on
